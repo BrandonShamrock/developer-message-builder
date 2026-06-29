@@ -14,8 +14,8 @@ const pages = [
 
 const emptyTemplate = { name: '', category: '', description: '', template_body: '', variables: [] }
 const emptyClient = {
-  client_name: '', brand_name: '', organisation_name: '', contact_person: '', contact_email: '',
-  contact_number: '', industry: '', brand_tone: '', preferred_language: '', website: '', notes: '',
+  client_name: '', organisation_name: '', location: '', contact_number: '', brand_name: '',
+  website: '', contact_email: '', description: '', notes: '',
 }
 
 function App() {
@@ -130,27 +130,54 @@ function Clients({ user }) {
   const [rows, setRows] = useState([]); const [form, setForm] = useState(emptyClient); const [editing, setEditing] = useState(null); const [notice, setNotice] = useState('')
   async function load() { const { data, error } = await supabase.from('clients').select('*').order('created_at', { ascending: false }); if (!error) setRows(data || []) }
   useEffect(() => { load() }, [])
-  async function save(e) { e.preventDefault(); const payload = { ...form, created_by: getUserId(user) }; const q = editing ? supabase.from('clients').update(payload).eq('id', editing) : supabase.from('clients').insert(payload); const { error } = await q; setNotice(error?.message || 'Client saved.'); if (!error) { setForm(emptyClient); setEditing(null); load() } }
+  async function save(e) {
+    e.preventDefault()
+    const organisationName = (form.organisation_name || form.client_name || '').trim()
+    const payload = { ...form, organisation_name: organisationName, client_name: organisationName, created_by: getUserId(user) }
+    const q = editing ? supabase.from('clients').update(payload).eq('id', editing) : supabase.from('clients').insert(payload)
+    const { error } = await q
+    setNotice(error?.message || 'Client saved.')
+    if (!error) { setForm(emptyClient); setEditing(null); load() }
+  }
+  function edit(row) {
+    const organisationName = row.organisation_name || row.client_name || ''
+    setEditing(row.id)
+    setForm({ ...emptyClient, ...row, organisation_name: organisationName, client_name: organisationName })
+  }
   async function remove(id) { if (confirm('Delete this client?')) { await supabase.from('clients').delete().eq('id', id); load() } }
-  return <section><Editor title={editing ? 'Edit client' : 'Create client'} onSubmit={save} notice={notice}>{Object.keys(emptyClient).map(k => <Input key={k} name={k} form={form} setForm={setForm} textarea={k === 'notes'} required={k === 'client_name'} />)}<button>Save Client</button>{editing && <button type="button" className="secondary" onClick={() => { setEditing(null); setForm(emptyClient) }}>Cancel</button>}</Editor><div className="list">{rows.map(row => <Record key={row.id} title={row.client_name} subtitle={row.brand_name || row.industry} body={row.notes} actions={<><button onClick={() => { setEditing(row.id); setForm({ ...emptyClient, ...row }) }}>Edit</button><button className="danger" onClick={() => remove(row.id)}>Delete</button></>} />)}</div></section>
+  return <section><Editor title={editing ? 'Edit client' : 'Create client'} onSubmit={save} notice={notice}>
+    <Input name="organisation_name" label="Organisation Name" form={form} setForm={setForm} required />
+    <Input name="location" label="Location" form={form} setForm={setForm} />
+    <Input name="contact_number" label="Contact Number" form={form} setForm={setForm} />
+    <Input name="brand_name" label="Brand" form={form} setForm={setForm} />
+    <Input name="website" label="Website" form={form} setForm={setForm} />
+    <Input name="contact_email" label="Email Address" form={form} setForm={setForm} />
+    <Input name="description" label="Description" form={form} setForm={setForm} textarea />
+    <Input name="notes" label="Notes" form={form} setForm={setForm} textarea />
+    <button>Save Client</button>{editing && <button type="button" className="secondary" onClick={() => { setEditing(null); setForm(emptyClient) }}>Cancel</button>}
+  </Editor><div className="list">{rows.map(row => {
+    const title = row.organisation_name || row.client_name || 'Untitled organisation'
+    const details = [row.location, row.brand_name, row.contact_number, row.contact_email, row.website].filter(Boolean).join(' · ')
+    return <Record key={row.id} title={title} subtitle={details} body={row.description || row.notes} actions={<><button onClick={() => edit(row)}>Edit</button><button className="danger" onClick={() => remove(row.id)}>Delete</button></>} />
+  })}</div></section>
 }
 
 function Builder({ user }) {
   const [templates, setTemplates] = useState([]), [clients, setClients] = useState([]), [templateId, setTemplateId] = useState(''), [clientId, setClientId] = useState(''), [manual, setManual] = useState({}), [notice, setNotice] = useState('')
   useEffect(() => { supabase.from('templates').select('*').then(({ data }) => setTemplates(data || [])); supabase.from('clients').select('*').then(({ data }) => setClients(data || [])) }, [])
-  const template = templates.find(t => String(t.id) === String(templateId)); const client = clients.find(c => String(c.id) === String(clientId)); const vars = template?.variables?.length ? template.variables : detectVariables(template?.template_body)
+  const template = templates.find(t => String(t.id) === String(templateId)); const selectedClient = clients.find(c => String(c.id) === String(clientId)); const client = selectedClient ? { ...selectedClient, organisation_name: selectedClient.organisation_name || selectedClient.client_name || '', client_name: selectedClient.client_name || selectedClient.organisation_name || '' } : null; const vars = template?.variables?.length ? template.variables : detectVariables(template?.template_body)
   const values = useMemo(() => Object.fromEntries((vars || []).map(v => [v, client?.[v] || manual[v] || ''])), [vars, client, manual])
   const finalMessage = buildMessage(template?.template_body, values); const missing = (vars || []).filter(v => !values[v])
   async function save() { const { error } = await supabase.from('generated_messages').insert({ template_id: templateId || null, client_id: clientId || null, final_message: finalMessage, variables_used: values, created_by: getUserId(user) }); setNotice(error?.message || 'Generated message saved.') }
-  return <section className="builder"><div className="form-card"><label>Template<select value={templateId} onChange={e => setTemplateId(e.target.value)}><option value="">Select a template</option>{templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label><label>Client<select value={clientId} onChange={e => setClientId(e.target.value)}><option value="">Select a client</option>{clients.map(c => <option key={c.id} value={c.id}>{c.client_name}</option>)}</select></label>{vars?.map(v => <label key={v}>{v}<input value={values[v]} onChange={e => setManual({ ...manual, [v]: e.target.value })} placeholder={client?.[v] ? 'From client' : 'Manual value'} /></label>)}{missing.length > 0 && <p className="warning">Missing variables: {missing.join(', ')}</p>}<div className="actions"><button onClick={() => navigator.clipboard.writeText(finalMessage)}>Copy to Clipboard</button><button onClick={save} disabled={!finalMessage}>Save Generated Message</button></div>{notice && <p className="notice">{notice}</p>}</div><Preview text={finalMessage} /></section>
+  return <section className="builder"><div className="form-card"><label>Template<select value={templateId} onChange={e => setTemplateId(e.target.value)}><option value="">Select a template</option>{templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label><label>Client<select value={clientId} onChange={e => setClientId(e.target.value)}><option value="">Select a client</option>{clients.map(c => <option key={c.id} value={c.id}>{c.organisation_name || c.client_name || 'Untitled organisation'}</option>)}</select></label>{vars?.map(v => <label key={v}>{v}<input value={values[v]} onChange={e => setManual({ ...manual, [v]: e.target.value })} placeholder={client?.[v] ? 'From client' : 'Manual value'} /></label>)}{missing.length > 0 && <p className="warning">Missing variables: {missing.join(', ')}</p>}<div className="actions"><button onClick={() => navigator.clipboard.writeText(finalMessage)}>Copy to Clipboard</button><button onClick={save} disabled={!finalMessage}>Save Generated Message</button></div>{notice && <p className="notice">{notice}</p>}</div><Preview text={finalMessage} /></section>
 }
 
 function History() {
   const [rows, setRows] = useState([]), [active, setActive] = useState(null)
-  async function load() { const { data } = await supabase.from('generated_messages').select('*, templates(name), clients(client_name)').order('created_at', { ascending: false }); setRows(data || []) }
+  async function load() { const { data } = await supabase.from('generated_messages').select('*, templates(name), clients(client_name, organisation_name)').order('created_at', { ascending: false }); setRows(data || []) }
   useEffect(() => { load() }, [])
   async function remove(id) { if (confirm('Delete this generated message?')) { await supabase.from('generated_messages').delete().eq('id', id); load() } }
-  return <section className="list">{rows.map(row => <Record key={row.id} title={row.templates?.name || 'Generated message'} subtitle={row.clients?.client_name || new Date(row.created_at).toLocaleString()} body={(row.final_message || '').slice(0, 180)} actions={<><button onClick={() => setActive(row)}>View</button><button onClick={() => navigator.clipboard.writeText(row.final_message || '')}>Copy</button><button className="danger" onClick={() => remove(row.id)}>Delete</button></>} />)}{active && <div className="modal"><div><button className="close" onClick={() => setActive(null)}>×</button><Preview text={active.final_message} /></div></div>}</section>
+  return <section className="list">{rows.map(row => <Record key={row.id} title={row.templates?.name || 'Generated message'} subtitle={row.clients?.organisation_name || row.clients?.client_name || new Date(row.created_at).toLocaleString()} body={(row.final_message || '').slice(0, 180)} actions={<><button onClick={() => setActive(row)}>View</button><button onClick={() => navigator.clipboard.writeText(row.final_message || '')}>Copy</button><button className="danger" onClick={() => remove(row.id)}>Delete</button></>} />)}{active && <div className="modal"><div><button className="close" onClick={() => setActive(null)}>×</button><Preview text={active.final_message} /></div></div>}</section>
 }
 
 function Editor({ title, onSubmit, notice, children }) { return <form className="form-card" onSubmit={onSubmit}><h2>{title}</h2>{children}{notice && <p className="notice">{notice}</p>}</form> }
