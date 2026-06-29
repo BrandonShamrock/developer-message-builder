@@ -45,23 +45,65 @@ function ConfigMissing() {
 }
 
 function Login() {
+  const [mode, setMode] = useState('sign-in')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [message, setMessage] = useState('')
+  const [messageType, setMessageType] = useState('error')
   const [busy, setBusy] = useState(false)
 
+  const isCreateAccount = mode === 'create-account'
+  const title = isCreateAccount ? 'Create Account' : 'Sign In'
+
+  function switchMode(nextMode) {
+    setMode(nextMode)
+    setMessage('')
+    setMessageType('error')
+    setConfirmPassword('')
+  }
+
   async function submit(e) {
-    e.preventDefault(); setBusy(true); setMessage('')
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) setMessage(error.message)
+    e.preventDefault()
+    setMessage('')
+    setMessageType('error')
+
+    if (isCreateAccount && password !== confirmPassword) {
+      setMessage('Password and Confirm Password must match.')
+      return
+    }
+
+    setBusy(true)
+    const { data, error } = isCreateAccount
+      ? await supabase.auth.signUp({ email, password })
+      : await supabase.auth.signInWithPassword({ email, password })
+
+    if (error) {
+      setMessage(error.message)
+    } else if (isCreateAccount && !data.session) {
+      setMessageType('success')
+      setMessage('Account created. Please check your email to confirm your account, then sign in.')
+      setMode('sign-in')
+      setPassword('')
+      setConfirmPassword('')
+    }
+
     setBusy(false)
   }
 
   return <div className="login-page"><form className="auth-card" onSubmit={submit}>
-    <h1>Developer Message Builder</h1><p>Sign in with your Supabase account.</p>
+    <h1>Developer Message Builder</h1>
+    <div className="auth-switch" role="tablist" aria-label="Authentication mode">
+      <button type="button" role="tab" aria-selected={!isCreateAccount} className={!isCreateAccount ? 'active' : ''} onClick={() => switchMode('sign-in')}>Sign In</button>
+      <button type="button" role="tab" aria-selected={isCreateAccount} className={isCreateAccount ? 'active' : ''} onClick={() => switchMode('create-account')}>Create Account</button>
+    </div>
+    <h2>{title}</h2>
+    <p>{isCreateAccount ? 'Create a new account with Supabase Auth.' : 'Sign in with your Supabase account.'}</p>
     <label>Email<input type="email" value={email} onChange={e => setEmail(e.target.value)} required /></label>
     <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} required /></label>
-    {message && <p className="error">{message}</p>}<button disabled={busy}>{busy ? 'Signing in...' : 'Log in'}</button>
+    {isCreateAccount && <label>Confirm Password<input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required /></label>}
+    {message && <p className={messageType === 'success' ? 'notice' : 'error'}>{message}</p>}
+    <button disabled={busy}>{busy ? `${title}...` : title}</button>
   </form></div>
 }
 
