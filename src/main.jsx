@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { supabase, isSupabaseConfigured } from './supabase'
 import { buildMessage, detectVariables, getUserId } from './utils'
@@ -13,6 +13,7 @@ const pages = [
 ]
 
 const emptyTemplate = { name: '', category: '', description: '', template_body: '', variables: [] }
+const templateVariables = ['organisation_name', 'location', 'contact_number', 'brand_name', 'website', 'contact_email', 'description', 'notes', 'client_name']
 const emptyClient = {
   client_name: '', organisation_name: '', location: '', contact_number: '', brand_name: '',
   website: '', contact_email: '', description: '', notes: '',
@@ -116,18 +117,22 @@ function Dashboard({ setPage }) {
 }
 
 function Templates({ user }) {
-  const [rows, setRows] = useState([]); const [form, setForm] = useState(emptyTemplate); const [editing, setEditing] = useState(null); const [notice, setNotice] = useState('')
+  const [rows, setRows] = useState([]); const [form, setForm] = useState(emptyTemplate); const [editing, setEditing] = useState(null); const [notice, setNotice] = useState(''); const [view, setView] = useState('list'); const [search, setSearch] = useState('')
   async function load() { const { data, error } = await supabase.from('templates').select('*').order('created_at', { ascending: false }); if (!error) setRows(data || []) }
   useEffect(() => { load() }, [])
-  async function save(e) { e.preventDefault(); const payload = { ...form, variables: detectVariables(form.template_body), created_by: getUserId(user) }; const q = editing ? supabase.from('templates').update(payload).eq('id', editing) : supabase.from('templates').insert(payload); const { error } = await q; setNotice(error?.message || 'Template saved.'); if (!error) { setForm(emptyTemplate); setEditing(null); load() } }
-  function edit(row) { setEditing(row.id); setForm({ ...emptyTemplate, ...row, variables: row.variables || [] }) }
+  async function save(e) { e.preventDefault(); const payload = { ...form, variables: detectVariables(form.template_body), created_by: getUserId(user) }; const q = editing ? supabase.from('templates').update(payload).eq('id', editing) : supabase.from('templates').insert(payload); const { error } = await q; setNotice(error?.message || (editing ? 'Template updated.' : 'Template saved.')); if (!error) { setForm(emptyTemplate); setEditing(null); setView('list'); load() } }
+  function edit(row) { setEditing(row.id); setForm({ ...emptyTemplate, ...row, variables: row.variables || [] }); setNotice(''); setView('edit') }
+  function create() { setEditing(null); setForm(emptyTemplate); setNotice(''); setView('create') }
+  function cancel() { setEditing(null); setForm(emptyTemplate); setNotice(''); setView('list') }
   async function remove(id) { if (confirm('Delete this template?')) { await supabase.from('templates').delete().eq('id', id); load() } }
   async function duplicate(row) { const { id, created_at, updated_at, ...copy } = row; await supabase.from('templates').insert({ ...copy, name: `${row.name} Copy`, created_by: getUserId(user) }); load() }
-  return <section><Editor title={editing ? 'Edit template' : 'Create template'} onSubmit={save} notice={notice}><Input name="name" form={form} setForm={setForm} required /><Input name="category" form={form} setForm={setForm} /><Input name="description" form={form} setForm={setForm} textarea /><Input name="template_body" label="Template body" form={form} setForm={setForm} textarea required /><p className="hint">Detected variables: {detectVariables(form.template_body).join(', ') || 'none'}</p><button>Save Template</button>{editing && <button type="button" className="secondary" onClick={() => { setEditing(null); setForm(emptyTemplate) }}>Cancel</button>}</Editor><div className="list">{rows.map(row => <Record key={row.id} title={row.name} subtitle={row.category} body={row.description} actions={<><button onClick={() => edit(row)}>Edit</button><button onClick={() => duplicate(row)}>Duplicate</button><button className="danger" onClick={() => remove(row.id)}>Delete</button></>} />)}</div></section>
+  const filtered = rows.filter(row => [row.name, row.category, row.description].some(value => String(value || '').toLowerCase().includes(search.toLowerCase()))).sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }))
+  if (view !== 'list') return <section><Editor title={view === 'edit' ? 'Edit Template' : 'Create Template'} onSubmit={save} notice={notice}><Input name="name" form={form} setForm={setForm} required /><Input name="category" form={form} setForm={setForm} /><Input name="description" form={form} setForm={setForm} textarea /><TemplateBodyInput form={form} setForm={setForm} /><p className="hint">Detected variables: {detectVariables(form.template_body).join(', ') || 'none'}</p><button>{view === 'edit' ? 'Save Changes' : 'Save Template'}</button><button type="button" className="secondary" onClick={cancel}>Back to Templates</button></Editor></section>
+  return <section><div className="list-toolbar"><input type="search" aria-label="Search templates" placeholder="Search templates by name, category, or description" value={search} onChange={e => setSearch(e.target.value)} /><button onClick={create}>Create Template</button></div>{notice && <p className="notice">{notice}</p>}<div className="list">{filtered.map(row => <Record key={row.id} title={row.name} subtitle={row.category} body={row.description} actions={<><button onClick={() => edit(row)}>Edit</button><button onClick={() => duplicate(row)}>Duplicate</button><button className="danger" onClick={() => remove(row.id)}>Delete</button></>} />)}{!filtered.length && <EmptyState text={search ? 'No templates match your search.' : 'No templates yet. Create your first template.'} />}</div></section>
 }
 
 function Clients({ user }) {
-  const [rows, setRows] = useState([]); const [form, setForm] = useState(emptyClient); const [editing, setEditing] = useState(null); const [notice, setNotice] = useState('')
+  const [rows, setRows] = useState([]); const [form, setForm] = useState(emptyClient); const [editing, setEditing] = useState(null); const [notice, setNotice] = useState(''); const [view, setView] = useState('list'); const [search, setSearch] = useState('')
   async function load() { const { data, error } = await supabase.from('clients').select('*').order('created_at', { ascending: false }); if (!error) setRows(data || []) }
   useEffect(() => { load() }, [])
   async function save(e) {
@@ -137,15 +142,19 @@ function Clients({ user }) {
     const q = editing ? supabase.from('clients').update(payload).eq('id', editing) : supabase.from('clients').insert(payload)
     const { error } = await q
     setNotice(error?.message || 'Client saved.')
-    if (!error) { setForm(emptyClient); setEditing(null); load() }
+    if (!error) { setForm(emptyClient); setEditing(null); setView('list'); load() }
   }
   function edit(row) {
     const organisationName = row.organisation_name || row.client_name || ''
     setEditing(row.id)
     setForm({ ...emptyClient, ...row, organisation_name: organisationName, client_name: organisationName })
+    setNotice(''); setView('edit')
   }
   async function remove(id) { if (confirm('Delete this client?')) { await supabase.from('clients').delete().eq('id', id); load() } }
-  return <section><Editor title={editing ? 'Edit client' : 'Create client'} onSubmit={save} notice={notice}>
+  function create() { setEditing(null); setForm(emptyClient); setNotice(''); setView('create') }
+  function cancel() { setEditing(null); setForm(emptyClient); setNotice(''); setView('list') }
+  const filtered = rows.filter(row => [row.organisation_name, row.client_name, row.location, row.brand_name, row.contact_number, row.contact_email, row.website, row.description, row.notes].some(value => String(value || '').toLowerCase().includes(search.toLowerCase()))).sort((a, b) => (a.organisation_name || a.client_name || '').localeCompare(b.organisation_name || b.client_name || '', undefined, { sensitivity: 'base' }))
+  if (view !== 'list') return <section><Editor title={view === 'edit' ? 'Edit Client' : 'Create Client'} onSubmit={save} notice={notice}>
     <Input name="organisation_name" label="Organisation Name" form={form} setForm={setForm} required />
     <Input name="location" label="Location" form={form} setForm={setForm} />
     <Input name="contact_number" label="Contact Number" form={form} setForm={setForm} />
@@ -154,12 +163,13 @@ function Clients({ user }) {
     <Input name="contact_email" label="Email Address" form={form} setForm={setForm} />
     <Input name="description" label="Description" form={form} setForm={setForm} textarea />
     <Input name="notes" label="Notes" form={form} setForm={setForm} textarea />
-    <button>Save Client</button>{editing && <button type="button" className="secondary" onClick={() => { setEditing(null); setForm(emptyClient) }}>Cancel</button>}
-  </Editor><div className="list">{rows.map(row => {
+    <button>{view === 'edit' ? 'Save Changes' : 'Save Client'}</button><button type="button" className="secondary" onClick={cancel}>Back to Clients</button>
+  </Editor></section>
+  return <section><div className="list-toolbar"><input type="search" aria-label="Search clients" placeholder="Search clients" value={search} onChange={e => setSearch(e.target.value)} /><button onClick={create}>Create Client</button></div>{notice && <p className="notice">{notice}</p>}<div className="list">{filtered.map(row => {
     const title = row.organisation_name || row.client_name || 'Untitled organisation'
     const details = [row.location, row.brand_name, row.contact_number, row.contact_email, row.website].filter(Boolean).join(' · ')
     return <Record key={row.id} title={title} subtitle={details} body={row.description || row.notes} actions={<><button onClick={() => edit(row)}>Edit</button><button className="danger" onClick={() => remove(row.id)}>Delete</button></>} />
-  })}</div></section>
+  })}{!filtered.length && <EmptyState text={search ? 'No clients match your search.' : 'No clients yet. Create your first client.'} />}</div></section>
 }
 
 function Builder({ user }) {
@@ -169,7 +179,9 @@ function Builder({ user }) {
   const values = useMemo(() => Object.fromEntries((vars || []).map(v => [v, client?.[v] || manual[v] || ''])), [vars, client, manual])
   const finalMessage = buildMessage(template?.template_body, values); const missing = (vars || []).filter(v => !values[v])
   async function save() { const { error } = await supabase.from('generated_messages').insert({ template_id: templateId || null, client_id: clientId || null, final_message: finalMessage, variables_used: values, created_by: getUserId(user) }); setNotice(error?.message || 'Generated message saved.') }
-  return <section className="builder"><div className="form-card"><label>Template<select value={templateId} onChange={e => setTemplateId(e.target.value)}><option value="">Select a template</option>{templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label><label>Client<select value={clientId} onChange={e => setClientId(e.target.value)}><option value="">Select a client</option>{clients.map(c => <option key={c.id} value={c.id}>{c.organisation_name || c.client_name || 'Untitled organisation'}</option>)}</select></label>{vars?.map(v => <label key={v}>{v}<input value={values[v]} onChange={e => setManual({ ...manual, [v]: e.target.value })} placeholder={client?.[v] ? 'From client' : 'Manual value'} /></label>)}{missing.length > 0 && <p className="warning">Missing variables: {missing.join(', ')}</p>}<div className="actions"><button onClick={() => navigator.clipboard.writeText(finalMessage)}>Copy to Clipboard</button><button onClick={save} disabled={!finalMessage}>Save Generated Message</button></div>{notice && <p className="notice">{notice}</p>}</div><Preview text={finalMessage} /></section>
+  const sortedTemplates = [...templates].sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }))
+  const sortedClients = [...clients].sort((a, b) => (a.organisation_name || a.client_name || '').localeCompare(b.organisation_name || b.client_name || '', undefined, { sensitivity: 'base' }))
+  return <section className="builder"><div className="form-card"><SearchableSelect label="Template" placeholder="Search templates" emptyLabel="Select a template" items={sortedTemplates} value={templateId} onChange={setTemplateId} getLabel={item => item.name || 'Untitled template'} /><SearchableSelect label="Client" placeholder="Search clients" emptyLabel="Select a client" items={sortedClients} value={clientId} onChange={setClientId} getLabel={item => item.organisation_name || item.client_name || 'Untitled organisation'} />{vars?.map(v => <label key={v}>{v}<input value={values[v]} onChange={e => setManual({ ...manual, [v]: e.target.value })} placeholder={client?.[v] ? 'From client' : 'Manual value'} /></label>)}{missing.length > 0 && <p className="warning">Missing variables: {missing.join(', ')}</p>}<div className="actions"><button onClick={() => navigator.clipboard.writeText(finalMessage)}>Copy to Clipboard</button><button onClick={save} disabled={!finalMessage}>Save Generated Message</button></div>{notice && <p className="notice">{notice}</p>}</div><Preview text={finalMessage} /></section>
 }
 
 function History() {
@@ -182,6 +194,29 @@ function History() {
 
 function Editor({ title, onSubmit, notice, children }) { return <form className="form-card" onSubmit={onSubmit}><h2>{title}</h2>{children}{notice && <p className="notice">{notice}</p>}</form> }
 function Input({ name, label, form, setForm, textarea, required }) { const text = label || name.replaceAll('_', ' '); const props = { value: form[name] || '', onChange: e => setForm({ ...form, [name]: e.target.value }), required }; return <label>{text}{textarea ? <textarea rows="4" {...props} /> : <input {...props} />}</label> }
+function TemplateBodyInput({ form, setForm }) {
+  const textareaRef = useRef(null)
+  function resize(element) { element.style.height = 'auto'; element.style.height = `${element.scrollHeight}px` }
+  function update(e) { setForm({ ...form, template_body: e.target.value }); resize(e.target) }
+  function insertVariable(variable) {
+    const element = textareaRef.current
+    const token = `{{${variable}}}`
+    const start = Number.isInteger(element?.selectionStart) ? element.selectionStart : form.template_body.length
+    const end = Number.isInteger(element?.selectionEnd) ? element.selectionEnd : start
+    const next = `${form.template_body.slice(0, start)}${token}${form.template_body.slice(end)}`
+    setForm({ ...form, template_body: next })
+    requestAnimationFrame(() => { if (!element) return; element.focus(); element.setSelectionRange(start + token.length, start + token.length); resize(element) })
+  }
+  useEffect(() => { if (textareaRef.current) resize(textareaRef.current) }, [form.template_body])
+  return <div className="template-body-field"><label>Template body<textarea ref={textareaRef} className="auto-expand" rows="6" value={form.template_body || ''} onChange={update} required /></label><div className="variable-picker"><span>Click to add variable</span><div>{templateVariables.map(variable => <button key={variable} type="button" onClick={() => insertVariable(variable)}>{`{{${variable}}}`}</button>)}</div></div></div>
+}
+function SearchableSelect({ label, placeholder, emptyLabel, items, value, onChange, getLabel }) {
+  const [query, setQuery] = useState('')
+  const filtered = items.filter(item => getLabel(item).toLowerCase().includes(query.trim().toLowerCase()))
+  const selected = items.find(item => String(item.id) === String(value))
+  return <div className="searchable-select"><label>{label}<input type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder={placeholder} aria-label={`${label} search`} /><select value={value} onChange={e => onChange(e.target.value)}><option value="">{emptyLabel}</option>{filtered.map(item => <option key={item.id} value={item.id}>{getLabel(item)}</option>)}{selected && !filtered.some(item => String(item.id) === String(value)) && <option value={selected.id}>{getLabel(selected)}</option>}</select></label>{selected && <p className="selected-item">Selected: <strong>{getLabel(selected)}</strong></p>}</div>
+}
+function EmptyState({ text }) { return <div className="empty-state"><p>{text}</p></div> }
 function Record({ title, subtitle, body, actions }) { return <article className="record"><div><h3>{title}</h3><p className="muted">{subtitle}</p><p>{body}</p></div><div className="record-actions">{actions}</div></article> }
 function Preview({ text }) { return <div className="preview"><h2>Live Preview</h2><pre>{text || 'Select a template to preview the developer message.'}</pre></div> }
 
