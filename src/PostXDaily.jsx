@@ -7,6 +7,8 @@ const STATUSES = [
   { value: 'completed', label: 'Completed' },
 ]
 const WIP_TAGS = ['With Dev', 'Awaiting Feedback', 'On Hold']
+const PAGE_SIZE = 5
+const initialVisibleCounts = () => Object.fromEntries(STATUSES.map(({ value }) => [value, PAGE_SIZE]))
 const today = () => new Date().toLocaleDateString('en-CA')
 const nextDate = date => {
   const value = new Date(`${date}T00:00:00Z`)
@@ -43,10 +45,14 @@ export default function PostXDaily({ user }) {
   const [exportDates, setExportDates] = useState({ start: date, end: date })
   const [notice, setNotice] = useState('')
   const [savingStatus, setSavingStatus] = useState('')
+  const [savingTask, setSavingTask] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [visibleCounts, setVisibleCounts] = useState(initialVisibleCounts)
   const isManager = profile?.role === 'manager'
 
   useEffect(() => { loadProfile() }, [user.id])
   useEffect(() => { if (profile) loadTasks() }, [date, ownerId, profile])
+  useEffect(() => { setVisibleCounts(initialVisibleCounts()) }, [date, ownerId])
 
   async function loadProfile() {
     let { data } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle()
@@ -77,43 +83,64 @@ export default function PostXDaily({ user }) {
     if (!result.error) setComments((result.data || []).reduce((all, item) => ({ ...all, [item.task_id]: [...(all[item.task_id] || []), item] }), {}))
   }
 
-  const grouped = useMemo(() => Object.fromEntries(STATUSES.map(({ value }) => [value, tasks.filter(task => task.status === value)])), [tasks])
+  const grouped = useMemo(() => Object.fromEntries(STATUSES.map(({ value }) => {
+    const matching = tasks.filter(task => task.status === value)
+    if (value === 'completed') matching.sort((a, b) => new Date(b.completed_at || 0) - new Date(a.completed_at || 0))
+    return [value, matching]
+  })), [tasks])
 
-  function openCreate() { setActive(null); setForm(blankTask(date)); setEditing(true) }
+  function openCreate() { setActive(null); setForm(blankTask(date)); setSaveError(''); setEditing(true) }
   function openEdit(task) {
     setActive(task)
     setForm({
       title: task.title, description: task.description || '', notes: task.notes || '', task_date: task.task_date,
       status: task.status, wip_tag: task.wip_tag || '', progress_comment: '', action_taken: task.action_taken || '', completion_comment: task.completion_comment || '',
     })
+    setSaveError('')
     setEditing(true)
   }
-  function close() { setEditing(false); setActive(null); setForm(blankTask(date)) }
+  function close() { if (savingTask) return; setEditing(false); setActive(null); setForm(blankTask(date)); setSaveError('') }
 
   async function saveTask(event) {
     event.preventDefault()
+    if (savingTask) return
+    setSavingTask(true)
+    setSaveError('')
     const wasCompleted = active?.status === 'completed'
     const isCompleted = form.status === 'completed'
     const completedAt = isCompleted ? (wasCompleted ? active.completed_at || new Date().toISOString() : new Date().toISOString()) : null
     const payload = {
       title: form.title, description: form.description, notes: form.notes, task_date: form.task_date,
-      status: form.status, wip_tag: form.wip_tag || null, action_taken: form.action_taken || null,
+      status: form.status, wip_tag: form.status === 'wip' ? form.wip_tag || null : null, action_taken: form.action_taken || null,
       completion_comment: form.completion_comment || null, completed_at: completedAt, owner_id: ownerId, updated_by: user.id,
       ...(form.status === 'wip' && active?.status !== 'wip' ? { moved_to_wip_at: new Date().toISOString() } : {}),
       ...(active ? {} : { created_by: user.id }),
     }
-    const result = active ? await supabase.from('daily_tasks').update(payload).eq('id', active.id) : await supabase.from('daily_tasks').insert(payload).select().single()
-    if (result.error) { setNotice(result.error.message); return }
+    const result = active
+      ? await supabase.from('daily_tasks').update(payload).eq('id', active.id).select().single()
+      : await supabase.from('daily_tasks').insert(payload).select().single()
+    if (result.error) {
+      setSaveError(`Unable to save task: ${result.error.message}`)
+      setSavingTask(false)
+      return
+    }
     const taskId = active?.id || result.data?.id
+    let followUpError = ''
     if (form.progress_comment.trim() && taskId) {
       const commentResult = await supabase.from('daily_task_comments').insert({ task_id: taskId, user_id: user.id, comment_type: 'progress', comment: form.progress_comment.trim() })
-      if (commentResult.error) setNotice(`Task saved, but progress update failed: ${commentResult.error.message}`)
+      if (commentResult.error) followUpError = ` Task saved, but progress update failed: ${commentResult.error.message}`
     }
     if (isCompleted && !wasCompleted && taskId && (form.action_taken || form.completion_comment)) {
-      await supabase.from('daily_task_comments').insert({ task_id: taskId, user_id: user.id, comment_type: 'completion', comment: form.completion_comment || 'Task completed.', action_taken: form.action_taken || null })
+      const commentResult = await supabase.from('daily_task_comments').insert({ task_id: taskId, user_id: user.id, comment_type: 'completion', comment: form.completion_comment || 'Task completed.', action_taken: form.action_taken || null })
+      if (commentResult.error) followUpError += ` Completion activity failed: ${commentResult.error.message}`
     }
-    setNotice(active ? 'Task updated.' : 'Task created.')
-    close(); loadTasks()
+    setNotice(`${active ? 'Task updated.' : 'Task created.'}${followUpError}`)
+    setVisibleCounts(initialVisibleCounts())
+    setSavingTask(false)
+    setEditing(false)
+    setActive(null)
+    setForm(blankTask(date))
+    await loadTasks()
   }
 
   async function updateStatus(task, status) {
@@ -127,6 +154,7 @@ export default function PostXDaily({ user }) {
     if (error) { setTasks(previous); setNotice(error.message) } else {
       if (task.status === 'completed') await supabase.from('daily_task_comments').insert({ task_id: task.id, user_id: user.id, comment_type: 'reopen', comment: `Moved back to ${statusLabel(status)}.` })
       setNotice(`Task moved to ${statusLabel(status)}.`)
+      setVisibleCounts(initialVisibleCounts())
       loadTasks()
     }
     setSavingStatus('')
@@ -136,7 +164,7 @@ export default function PostXDaily({ user }) {
     const previous = tasks
     setTasks(current => current.map(item => item.id === task.id ? { ...item, wip_tag: wipTag } : item))
     const { error } = await supabase.from('daily_tasks').update({ wip_tag: wipTag || null, updated_by: user.id }).eq('id', task.id)
-    if (error) { setTasks(previous); setNotice(error.message) } else setNotice('WIP tag updated.')
+    if (error) { setTasks(previous); setNotice(error.message) } else { setNotice('WIP tag updated.'); setVisibleCounts(initialVisibleCounts()) }
   }
 
   async function exportPdf() {
@@ -173,14 +201,16 @@ export default function PostXDaily({ user }) {
     <div className="kanban-board">
       {STATUSES.map(({ value, label }) => <section className={`kanban-column kanban-${value}`} key={value}>
         <header><h2>{label}</h2><span className="task-count">{grouped[value].length}</span></header>
-        <div className="kanban-tasks">{grouped[value].map(task => <TaskCard key={task.id} task={task} selectedDate={date} saving={savingStatus === task.id} onStatus={updateStatus} onTag={updateTag} onEdit={openEdit} />)}
+        <div className="kanban-tasks">{grouped[value].slice(0, visibleCounts[value]).map(task => <TaskCard key={task.id} task={task} selectedDate={date} saving={savingStatus === task.id} onStatus={updateStatus} onTag={updateTag} onEdit={openEdit} />)}
           {!grouped[value].length && <p className="kanban-empty">No {label.toLowerCase()} tasks.</p>}
+          {grouped[value].length > visibleCounts[value] && <button className="load-more" onClick={() => setVisibleCounts(current => ({ ...current, [value]: current[value] + PAGE_SIZE }))}>Load More</button>}
         </div>
       </section>)}
     </div>
     <div className="form-card export-card"><h2>Export to PDF</h2><div className="export-fields"><label>Start date<input type="date" value={exportDates.start} onChange={event => setExportDates({ ...exportDates, start: event.target.value })} /></label><label>End date<input type="date" value={exportDates.end} onChange={event => setExportDates({ ...exportDates, end: event.target.value })} /></label></div><button onClick={exportPdf}>Print / Save as PDF</button></div>
     {editing && <div className="modal" role="dialog" aria-modal="true" aria-labelledby="task-form-title"><div className="form-card daily-modal"><button className="close" aria-label="Close" onClick={close}>×</button>
       <form onSubmit={saveTask}><h2 id="task-form-title">{active ? 'Edit Task' : 'Create Task'}</h2>
+        {saveError && <p className="error modal-error" role="alert">{saveError}</p>}
         <div className="task-form-grid"><label>Task title<input value={form.title} onChange={event => setForm({ ...form, title: event.target.value })} required /></label><label>Task date<input type="date" value={form.task_date} onChange={event => setForm({ ...form, task_date: event.target.value })} required /></label></div>
         <label>Description<textarea rows="3" value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} /></label>
         <label>Notes<textarea rows="3" value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} /></label>
@@ -190,7 +220,7 @@ export default function PostXDaily({ user }) {
         <label>Action taken / completion note <span className="optional">(optional)</span><textarea rows="2" value={form.action_taken} onChange={event => setForm({ ...form, action_taken: event.target.value })} /></label>
         <label>Completion comment <span className="optional">(optional)</span><textarea rows="2" value={form.completion_comment} onChange={event => setForm({ ...form, completion_comment: event.target.value })} /></label>
         {active && <Activity comments={comments[active.id]} />}
-        <div className="actions"><button>{active ? 'Save Changes' : 'Create Task'}</button><button type="button" className="secondary" onClick={close}>Cancel</button></div>
+        <div className="actions"><button disabled={savingTask}>{savingTask ? 'Saving…' : active ? 'Save Changes' : 'Create Task'}</button><button type="button" className="secondary" onClick={close} disabled={savingTask}>Cancel</button></div>
       </form>
     </div></div>}
   </section>
