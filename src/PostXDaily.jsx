@@ -19,9 +19,9 @@ const blankTask = date => ({ title: '', description: '', notes: '', task_date: d
 const displayName = (profile, user) => profile?.full_name || profile?.email || user?.email || 'User'
 const statusLabel = status => STATUSES.find(item => item.value === status)?.label || status
 
-function formatDuration(createdAt, completedAt) {
-  if (!createdAt || !completedAt) return ''
-  const totalMinutes = Math.max(0, Math.floor((new Date(completedAt) - new Date(createdAt)) / 60000))
+function formatDuration(startedAt, completedAt) {
+  if (!startedAt || !completedAt) return ''
+  const totalMinutes = Math.max(0, Math.floor((new Date(completedAt) - new Date(startedAt)) / 60000))
   const days = Math.floor(totalMinutes / 1440)
   const hours = Math.floor((totalMinutes % 1440) / 60)
   const minutes = totalMinutes % 60
@@ -47,11 +47,24 @@ export default function PostXDaily({ user }) {
   const [savingStatus, setSavingStatus] = useState('')
   const [savingTask, setSavingTask] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [transferTask, setTransferTask] = useState(null)
+  const [transferTo, setTransferTo] = useState('')
+  const [transferNote, setTransferNote] = useState('')
+  const [transferring, setTransferring] = useState(false)
+  const [notifications, setNotifications] = useState([])
   const [visibleCounts, setVisibleCounts] = useState(initialVisibleCounts)
   const isManager = profile?.role === 'manager'
 
   useEffect(() => { loadProfile() }, [user.id])
   useEffect(() => { if (profile) loadTasks() }, [date, ownerId, profile])
+  useEffect(() => { if (profile) loadNotifications() }, [profile])
+  useEffect(() => {
+    if (!profile) return undefined
+    const channel = supabase.channel(`postx-daily-notifications-${user.id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'postx_daily_notifications', filter: `user_id=eq.${user.id}` }, loadNotifications)
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [profile, user.id])
   useEffect(() => { setVisibleCounts(initialVisibleCounts()) }, [date, ownerId])
 
   async function loadProfile() {
@@ -88,6 +101,53 @@ export default function PostXDaily({ user }) {
     setComments((result.data || []).reduce((all, item) => ({ ...all, [item.task_id]: [...(all[item.task_id] || []), item] }), {}))
   }
 
+
+  async function loadNotifications() {
+    const { data, error } = await supabase.from('postx_daily_notifications').select('*').is('read_at', null).order('created_at', { ascending: false })
+    if (error) { console.error('PostX Daily notifications could not be loaded:', error); return }
+    const unread = data || []
+    setNotifications(unread)
+    if (!('Notification' in window) || Notification.permission !== 'granted' || localStorage.getItem('postxDailyNotifications') !== 'enabled') return
+    const shown = JSON.parse(localStorage.getItem('postxDailyShownNotifications') || '[]')
+    unread.filter(item => !shown.includes(item.id)).forEach(item => new Notification(item.title, { body: item.message || '' }))
+    localStorage.setItem('postxDailyShownNotifications', JSON.stringify([...new Set([...shown, ...unread.map(item => item.id)])].slice(-100)))
+  }
+
+  async function enableNotifications() {
+    if (!('Notification' in window)) { setNotice('Browser notifications are not supported; in-app notifications will still appear.'); return }
+    const permission = await Notification.requestPermission()
+    if (permission === 'granted') { localStorage.setItem('postxDailyNotifications', 'enabled'); setNotice('Browser notifications enabled.'); loadNotifications() }
+    else setNotice('Browser notifications were not enabled; in-app notifications will still appear.')
+  }
+
+  async function markNotificationRead(id) {
+    const { error } = await supabase.from('postx_daily_notifications').update({ read_at: new Date().toISOString() }).eq('id', id)
+    if (error) setNotice(error.message); else setNotifications(current => current.filter(item => item.id !== id))
+  }
+
+  function openTransfer(task) {
+    const firstRecipient = profiles.find(item => item.id && item.id !== task.owner_id)
+    setTransferTask(task); setTransferTo(firstRecipient?.id || ''); setTransferNote('')
+  }
+
+  async function submitTransfer(event) {
+    event.preventDefault()
+    if (!isManager || !transferTask || !transferTo || transferring) return
+    setTransferring(true)
+    const recipient = profiles.find(item => item.id === transferTo)
+    const { error } = await supabase.rpc('transfer_daily_task', {
+      p_task_id: transferTask.id, p_new_owner_id: transferTo, p_task_date: date,
+      p_recipient_name: displayName(recipient), p_note: transferNote.trim() || null,
+    })
+    if (error) setNotice(`Unable to transfer task: ${error.message}`)
+    else {
+      setTransferTask(null); setTransferTo(''); setTransferNote('')
+      setNotice(`Task transferred to ${displayName(recipient)} and moved to To Do.`)
+      await loadTasks()
+    }
+    setTransferring(false)
+  }
+
   const grouped = useMemo(() => Object.fromEntries(STATUSES.map(({ value }) => {
     const matching = tasks.filter(task => task.status === value)
     if (value === 'completed') matching.sort((a, b) => new Date(b.completed_at || 0) - new Date(a.completed_at || 0))
@@ -121,6 +181,8 @@ export default function PostXDaily({ user }) {
         task_date: form.task_date, status: form.status, wip_tag: form.wip_tag || null, action_taken: form.action_taken || null,
         completion_comment: form.completion_comment || null, completed_at: completedAt,
         updated_by: user.id, updated_at: now,
+        ...(!active ? { timer_started_at: now } : {}),
+        ...(active && wasCompleted && !isCompleted ? { timer_started_at: now } : {}),
         ...(form.status === 'wip' && active?.status !== 'wip' ? { moved_to_wip_at: now } : {}),
       }
       // Never take owner_id from editable form data. Agents always own their new
@@ -165,9 +227,10 @@ export default function PostXDaily({ user }) {
     if (status === task.status) return
     setSavingStatus(task.id)
     const previous = tasks
-    const completedAt = status === 'completed' ? new Date().toISOString() : null
+    const now = new Date().toISOString()
+    const completedAt = status === 'completed' ? (task.completed_at || now) : null
     setTasks(current => current.map(item => item.id === task.id ? { ...item, status, completed_at: completedAt } : item).filter(item => item.status !== 'completed' || item.completed_at?.slice(0, 10) === date))
-    const payload = { status, completed_at: completedAt, updated_by: user.id, ...(status === 'wip' ? { moved_to_wip_at: new Date().toISOString() } : {}) }
+    const payload = { status, completed_at: completedAt, updated_by: user.id, updated_at: now, ...(task.status === 'completed' && status !== 'completed' ? { timer_started_at: now } : {}), ...(status === 'wip' ? { moved_to_wip_at: now } : {}) }
     const { error } = await supabase.from('daily_tasks').update(payload).eq('id', task.id)
     if (error) { setTasks(previous); setNotice(error.message) } else {
       if (task.status === 'completed') await supabase.from('daily_task_comments').insert({ task_id: task.id, user_id: user.id, comment_type: 'reopen', comment: `Moved back to ${statusLabel(status)}.` })
@@ -198,8 +261,8 @@ export default function PostXDaily({ user }) {
     const escape = value => String(value || '—').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
     const sections = STATUSES.map(({ value: status, label }) => {
       const items = reportTasks.filter(task => task.status === status).map(task => {
-        const progress = (task.daily_task_comments || []).filter(comment => comment.comment_type === 'progress').map(comment => `<p><b>Progress:</b> ${escape(comment.comment)}${comment.action_taken ? ` — ${escape(comment.action_taken)}` : ''}</p>`).join('')
-        return `<article><h3>${escape(task.title)}</h3><p><b>Status:</b> ${label} · <b>Task date:</b> ${escape(task.task_date)}</p><p><b>Description:</b> ${escape(task.description)}</p><p><b>Notes:</b> ${escape(task.notes)}</p>${task.wip_tag ? `<p><b>WIP tag:</b> ${escape(task.wip_tag)}</p>` : ''}${progress}${status === 'completed' ? `<p><b>Action taken:</b> ${escape(task.action_taken)}</p><p><b>Completion notes:</b> ${escape(task.completion_comment)}</p><p><b>Completed:</b> ${escape(task.completed_at ? new Date(task.completed_at).toLocaleString() : '')}</p><p><b>Time taken:</b> ${escape(formatDuration(task.created_at, task.completed_at))}</p>` : ''}</article>`
+        const progress = (task.daily_task_comments || []).map(comment => `<p><b>${escape(statusLabel(comment.comment_type))}:</b> ${escape(comment.comment)}${comment.action_taken ? ` — ${escape(comment.action_taken)}` : ''}</p>`).join('')
+        return `<article><h3>${escape(task.title)}</h3><p><b>Status:</b> ${label} · <b>Task date:</b> ${escape(task.task_date)}</p><p><b>Description:</b> ${escape(task.description)}</p><p><b>Notes:</b> ${escape(task.notes)}</p>${task.wip_tag ? `<p><b>WIP tag:</b> ${escape(task.wip_tag)}</p>` : ''}${progress}${status === 'completed' ? `<p><b>Action taken:</b> ${escape(task.action_taken)}</p><p><b>Completion notes:</b> ${escape(task.completion_comment)}</p><p><b>Completed:</b> ${escape(task.completed_at ? new Date(task.completed_at).toLocaleString() : '')}</p><p><b>Time taken:</b> ${escape(formatDuration(task.timer_started_at || task.created_at, task.completed_at))}</p>` : ''}</article>`
       }).join('')
       return `<section><h2>${label} Tasks</h2>${items || '<p>No tasks.</p>'}</section>`
     }).join('')
@@ -216,10 +279,15 @@ export default function PostXDaily({ user }) {
       <button className="create-task" onClick={openCreate}>Create Task</button>
     </div>
     {notice && <p className="notice" role="status">{notice}</p>}
+    <div className="notification-bar form-card">
+      <div><strong>Notifications {notifications.length ? `(${notifications.length})` : ''}</strong>{!notifications.length && <span className="muted"> No unread transfers</span>}</div>
+      <button className="secondary notification-enable" onClick={enableNotifications}>Enable Notifications</button>
+      {notifications.map(item => <div className="notification-item" key={item.id}><div><strong>{item.title}</strong><p>{item.message}</p></div><button className="secondary" onClick={() => markNotificationRead(item.id)}>Mark read</button></div>)}
+    </div>
     <div className="kanban-board">
       {STATUSES.map(({ value, label }) => <section className={`kanban-column kanban-${value}`} key={value}>
         <header><h2>{label}</h2><span className="task-count">{grouped[value].length}</span></header>
-        <div className="kanban-tasks">{grouped[value].slice(0, visibleCounts[value]).map(task => <TaskCard key={task.id} task={task} selectedDate={date} saving={savingStatus === task.id} onStatus={updateStatus} onTag={updateTag} onEdit={openEdit} />)}
+        <div className="kanban-tasks">{grouped[value].slice(0, visibleCounts[value]).map(task => <TaskCard key={task.id} task={task} selectedDate={date} saving={savingStatus === task.id} onStatus={updateStatus} onTag={updateTag} onEdit={openEdit} onTransfer={isManager ? openTransfer : null} />)}
           {!grouped[value].length && <p className="kanban-empty">No {label.toLowerCase()} tasks.</p>}
           {grouped[value].length > visibleCounts[value] && <button className="load-more" onClick={() => setVisibleCounts(current => ({ ...current, [value]: current[value] + PAGE_SIZE }))}>Load More</button>}
         </div>
@@ -241,19 +309,26 @@ export default function PostXDaily({ user }) {
         <div className="actions"><button disabled={savingTask}>{savingTask ? 'Saving…' : active ? 'Save Changes' : 'Create Task'}</button><button type="button" className="secondary" onClick={close} disabled={savingTask}>Cancel</button></div>
       </form>
     </div></div>}
+    {transferTask && <div className="modal" role="dialog" aria-modal="true" aria-labelledby="transfer-title"><div className="form-card transfer-modal">
+      <button className="close" aria-label="Close" onClick={() => !transferring && setTransferTask(null)}>×</button>
+      <form onSubmit={submitTransfer}><h2 id="transfer-title">Transfer Task</h2><p>Transfer <strong>{transferTask.title}</strong> to another user. Its status and timer will restart.</p>
+        <label>Transfer to user<select value={transferTo} onChange={event => setTransferTo(event.target.value)} required><option value="">Select a user</option>{profiles.filter(item => item.id && item.id !== transferTask.owner_id).map(item => <option key={item.id} value={item.id}>{displayName(item)}</option>)}</select></label>
+        <label>Transfer note <span className="optional">(optional)</span><textarea rows="3" value={transferNote} onChange={event => setTransferNote(event.target.value)} /></label>
+        <div className="actions"><button disabled={transferring || !transferTo}>{transferring ? 'Transferring…' : 'Transfer Task'}</button><button type="button" className="secondary" disabled={transferring} onClick={() => setTransferTask(null)}>Cancel</button></div>
+      </form></div></div>}
   </section>
 }
 
-function TaskCard({ task, selectedDate, saving, onStatus, onTag, onEdit }) {
+function TaskCard({ task, selectedDate, saving, onStatus, onTag, onEdit, onTransfer }) {
   const carried = task.task_date < selectedDate && task.status !== 'completed'
   return <article className={`kanban-task task-${task.status}`}>
     <div className="task-card-heading"><h3>{task.title}</h3>{task.wip_tag && <span className="tag-pill">{task.wip_tag}</span>}</div>
     <p>{task.description || <span className="muted">No description</span>}</p>
     <small>{task.task_date}{carried ? ' · Carried over' : ''}</small>
-    {task.status === 'completed' && task.completed_at && <p className="time-taken"><strong>Time taken:</strong> {formatDuration(task.created_at, task.completed_at)}</p>}
+    {task.status === 'completed' && task.completed_at && <p className="time-taken"><strong>Time taken:</strong> {formatDuration(task.timer_started_at || task.created_at, task.completed_at)}</p>}
     <label className="compact-field">Status<select aria-label={`Status for ${task.title}`} value={task.status} disabled={saving} onChange={event => onStatus(task, event.target.value)}>{STATUSES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
     {task.status === 'wip' && <label className="compact-field">WIP tag<select aria-label={`WIP tag for ${task.title}`} value={task.wip_tag || ''} onChange={event => onTag(task, event.target.value)}><option value="">No tag</option>{WIP_TAGS.map(tag => <option key={tag}>{tag}</option>)}</select></label>}
-    <button className="secondary edit-task" onClick={() => onEdit(task)}>Edit</button>
+    <div className="task-actions"><button className="secondary edit-task" onClick={() => onEdit(task)}>Edit</button>{onTransfer && <button className="transfer-task" title="Transfer task" aria-label={`Transfer ${task.title}`} onClick={() => onTransfer(task)}>⇄ Transfer</button>}</div>
   </article>
 }
 
