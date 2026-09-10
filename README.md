@@ -97,3 +97,31 @@ Expected fields used by the app include:
 - Do not hardcode Supabase credentials.
 - Do not add a Supabase service role key to frontend code.
 - Configure Supabase Row Level Security policies to ensure users can only access the rows they are allowed to manage.
+
+## PostX Daily Setup
+
+PostX Daily adds date-based To Do, carried-over WIP, completed-task history, progress comments, manager team views, and printable PDF reports. Before using it, run [`supabase/postx_daily_schema.sql`](supabase/postx_daily_schema.sql) in the Supabase SQL editor. The script adds the task/comment tables, indexes, timestamps, profile role fields, and Row Level Security policies. It never requires a service-role key in the browser.
+
+### Assign team roles
+
+After replacing the placeholder emails with the exact Supabase Auth emails, run:
+
+```sql
+update public.profiles
+set role = 'manager', full_name = 'Brandon'
+where email = 'BRANDON_EMAIL_HERE';
+
+update public.profiles
+set role = 'agent', full_name = 'Jamie'
+where email = 'JAMIE_EMAIL_HERE';
+
+update public.profiles
+set role = 'agent', full_name = 'Petunia'
+where email = 'PETUNIA_EMAIL_HERE';
+```
+
+New users receive an `agent` profile when they first open PostX Daily if a profile does not already exist. Set managers manually: never let users assign their own manager role. Confirm every profile's `id` matches its user ID in **Authentication → Users**. Managers can then select any readable profile; agents remain restricted to their own records by both the UI and RLS.
+
+### PDF reports
+
+The export opens a print-optimised report in a new browser tab and opens the system print dialog. Choose **Save as PDF** as the printer destination. If the tab does not open, allow popups for the app's origin.

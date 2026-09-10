@@ -63,3 +63,21 @@ section { display: grid; gap: 1rem; }
 .close { position: absolute; top: .75rem; right: .75rem; border-radius: 50%; padding: .4rem .7rem; }
 @media (max-width: 820px) { .app-shell { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; } .sidebar nav { grid-template-columns: repeat(2, 1fr); } .grid, .builder { grid-template-columns: 1fr; } .record { display: grid; } }
 @media (max-width: 520px) { main { padding: 1rem; } .list-toolbar { grid-template-columns: 1fr; } .list-toolbar button { width: 100%; } .record-actions { justify-content: flex-start; } .auto-expand { max-height: 60vh; } }
+.postx-daily { max-width: 1100px; }
+.daily-controls { display: grid; grid-template-columns: repeat(2, minmax(180px, 320px)); gap: 1rem; }
+.daily-controls label, .export-fields label { margin: 0; }
+.daily-card { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 16px 35px rgba(23,32,51,.08); padding: 1.4rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.daily-card h2 { margin: 0 0 .35rem; }
+.task-count { color: var(--muted); }
+.export-card h2 { margin-top: 0; }
+.export-fields { display: grid; grid-template-columns: repeat(2, minmax(160px, 280px)); gap: 1rem; margin-bottom: 1rem; }
+.daily-modal { width: min(820px, 100%); }
+.daily-modal > h2, .daily-modal form > h2 { padding-right: 3rem; }
+.task-list { display: grid; gap: .75rem; }
+.task-row { border: 1px solid var(--line); border-radius: 12px; padding: 1rem; display: flex; justify-content: space-between; gap: 1rem; }
+.task-row h4 { margin: 0; }
+.task-row small { color: var(--muted); }
+.comment { background: #f8fafc; border-left: 3px solid var(--brand); padding: .75rem; margin: .6rem 0; }
+.comment small { display: block; color: var(--muted); margin-top: .2rem; }
+.comment p { margin-bottom: 0; white-space: pre-wrap; }
+@media (max-width: 620px) { .daily-controls, .export-fields { grid-template-columns: 1fr; } .daily-card, .task-row { align-items: stretch; display: grid; } .daily-card .actions button { width: 100%; } }
