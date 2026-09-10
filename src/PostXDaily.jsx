@@ -80,7 +80,12 @@ export default function PostXDaily({ user }) {
     const ids = (data || []).map(task => task.id)
     if (!ids.length) { setComments({}); return }
     const result = await supabase.from('daily_task_comments').select('*').in('task_id', ids).order('created_at')
-    if (!result.error) setComments((result.data || []).reduce((all, item) => ({ ...all, [item.task_id]: [...(all[item.task_id] || []), item] }), {}))
+    if (result.error) {
+      console.error('PostX Daily comments could not be loaded:', result.error)
+      setNotice(`Tasks loaded, but activity could not be loaded: ${result.error.message}`)
+      return
+    }
+    setComments((result.data || []).reduce((all, item) => ({ ...all, [item.task_id]: [...(all[item.task_id] || []), item] }), {}))
   }
 
   const grouped = useMemo(() => Object.fromEntries(STATUSES.map(({ value }) => {
@@ -106,41 +111,54 @@ export default function PostXDaily({ user }) {
     if (savingTask) return
     setSavingTask(true)
     setSaveError('')
-    const wasCompleted = active?.status === 'completed'
-    const isCompleted = form.status === 'completed'
-    const completedAt = isCompleted ? (wasCompleted ? active.completed_at || new Date().toISOString() : new Date().toISOString()) : null
-    const payload = {
-      title: form.title, description: form.description, notes: form.notes, task_date: form.task_date,
-      status: form.status, wip_tag: form.status === 'wip' ? form.wip_tag || null : null, action_taken: form.action_taken || null,
-      completion_comment: form.completion_comment || null, completed_at: completedAt, owner_id: ownerId, updated_by: user.id,
-      ...(form.status === 'wip' && active?.status !== 'wip' ? { moved_to_wip_at: new Date().toISOString() } : {}),
-      ...(active ? {} : { created_by: user.id }),
-    }
-    const result = active
-      ? await supabase.from('daily_tasks').update(payload).eq('id', active.id).select().single()
-      : await supabase.from('daily_tasks').insert(payload).select().single()
-    if (result.error) {
-      setSaveError(`Unable to save task: ${result.error.message}`)
+    try {
+      const wasCompleted = active?.status === 'completed'
+      const isCompleted = form.status === 'completed'
+      const now = new Date().toISOString()
+      const completedAt = isCompleted ? (wasCompleted ? active.completed_at || now : now) : null
+      const fields = {
+        title: form.title.trim(), description: form.description || null, notes: form.notes || null,
+        task_date: form.task_date, status: form.status, wip_tag: form.wip_tag || null, action_taken: form.action_taken || null,
+        completion_comment: form.completion_comment || null, completed_at: completedAt,
+        updated_by: user.id, updated_at: now,
+        ...(form.status === 'wip' && active?.status !== 'wip' ? { moved_to_wip_at: now } : {}),
+      }
+      // Never take owner_id from editable form data. Agents always own their new
+      // tasks, while managers create for the currently selected team member.
+      const result = active
+        ? await supabase.from('daily_tasks').update(fields).eq('id', active.id).select().single()
+        : await supabase.from('daily_tasks').insert({
+          ...fields, owner_id: isManager ? ownerId : user.id, created_by: user.id,
+        }).select().single()
+      if (result.error) throw result.error
+
+      const taskId = result.data.id
+      let followUpError = ''
+      if (form.progress_comment.trim()) {
+        const commentResult = await supabase.from('daily_task_comments').insert({ task_id: taskId, user_id: user.id, comment_type: 'progress', comment: form.progress_comment.trim() })
+        if (commentResult.error) followUpError = ` Task saved, but progress update failed: ${commentResult.error.message}`
+      }
+      if (isCompleted && !wasCompleted && (form.action_taken || form.completion_comment)) {
+        const commentResult = await supabase.from('daily_task_comments').insert({ task_id: taskId, user_id: user.id, comment_type: 'completion', comment: form.completion_comment || 'Task completed.', action_taken: form.action_taken || null })
+        if (commentResult.error) followUpError += ` Completion activity failed: ${commentResult.error.message}`
+      }
+
+      // Update in memory first so the card changes buckets without waiting for a
+      // round trip, then reload to make Supabase the source of truth.
+      setTasks(current => [...current.filter(task => task.id !== taskId), result.data])
+      setNotice(`${active ? 'Task updated.' : 'Task created.'}${followUpError}`)
+      setVisibleCounts(initialVisibleCounts())
+      setEditing(false)
+      setActive(null)
+      setForm(blankTask(date))
+      await loadTasks()
+    } catch (error) {
+      const message = error?.message || 'An unexpected error occurred.'
+      console.error('PostX Daily task save failed:', error)
+      setSaveError(`Unable to save task: ${message}`)
+    } finally {
       setSavingTask(false)
-      return
     }
-    const taskId = active?.id || result.data?.id
-    let followUpError = ''
-    if (form.progress_comment.trim() && taskId) {
-      const commentResult = await supabase.from('daily_task_comments').insert({ task_id: taskId, user_id: user.id, comment_type: 'progress', comment: form.progress_comment.trim() })
-      if (commentResult.error) followUpError = ` Task saved, but progress update failed: ${commentResult.error.message}`
-    }
-    if (isCompleted && !wasCompleted && taskId && (form.action_taken || form.completion_comment)) {
-      const commentResult = await supabase.from('daily_task_comments').insert({ task_id: taskId, user_id: user.id, comment_type: 'completion', comment: form.completion_comment || 'Task completed.', action_taken: form.action_taken || null })
-      if (commentResult.error) followUpError += ` Completion activity failed: ${commentResult.error.message}`
-    }
-    setNotice(`${active ? 'Task updated.' : 'Task created.'}${followUpError}`)
-    setVisibleCounts(initialVisibleCounts())
-    setSavingTask(false)
-    setEditing(false)
-    setActive(null)
-    setForm(blankTask(date))
-    await loadTasks()
   }
 
   async function updateStatus(task, status) {
