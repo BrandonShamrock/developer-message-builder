@@ -1,9 +1,34 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { supabase } from './supabase'
 
+const STATUSES = [
+  { value: 'todo', label: 'To Do' },
+  { value: 'wip', label: 'WIP' },
+  { value: 'completed', label: 'Completed' },
+]
+const WIP_TAGS = ['With Dev', 'Awaiting Feedback', 'On Hold']
 const today = () => new Date().toLocaleDateString('en-CA')
-const blankTask = date => ({ title: '', description: '', notes: '', task_date: date })
+const nextDate = date => {
+  const value = new Date(`${date}T00:00:00Z`)
+  value.setUTCDate(value.getUTCDate() + 1)
+  return value.toISOString().slice(0, 10)
+}
+const blankTask = date => ({ title: '', description: '', notes: '', task_date: date, status: 'todo', wip_tag: '', progress_comment: '', action_taken: '', completion_comment: '' })
 const displayName = (profile, user) => profile?.full_name || profile?.email || user?.email || 'User'
+const statusLabel = status => STATUSES.find(item => item.value === status)?.label || status
+
+function formatDuration(createdAt, completedAt) {
+  if (!createdAt || !completedAt) return ''
+  const totalMinutes = Math.max(0, Math.floor((new Date(completedAt) - new Date(createdAt)) / 60000))
+  const days = Math.floor(totalMinutes / 1440)
+  const hours = Math.floor((totalMinutes % 1440) / 60)
+  const minutes = totalMinutes % 60
+  const parts = []
+  if (days) parts.push(`${days} day${days === 1 ? '' : 's'}`)
+  if (hours) parts.push(`${hours} hour${hours === 1 ? '' : 's'}`)
+  if (minutes || !parts.length) parts.push(`${minutes} minute${minutes === 1 ? '' : 's'}`)
+  return parts.join(' ')
+}
 
 export default function PostXDaily({ user }) {
   const [date, setDate] = useState(today())
@@ -12,13 +37,12 @@ export default function PostXDaily({ user }) {
   const [ownerId, setOwnerId] = useState(user.id)
   const [tasks, setTasks] = useState([])
   const [comments, setComments] = useState({})
-  const [dialog, setDialog] = useState(null)
+  const [editing, setEditing] = useState(false)
   const [active, setActive] = useState(null)
   const [form, setForm] = useState(blankTask(date))
-  const [progress, setProgress] = useState({ comment: '', action_taken: '' })
-  const [completion, setCompletion] = useState({ task_id: '', time_taken: '', action_taken: '', completion_comment: '' })
   const [exportDates, setExportDates] = useState({ start: date, end: date })
   const [notice, setNotice] = useState('')
+  const [savingStatus, setSavingStatus] = useState('')
   const isManager = profile?.role === 'manager'
 
   useEffect(() => { loadProfile() }, [user.id])
@@ -41,7 +65,10 @@ export default function PostXDaily({ user }) {
   }
 
   async function loadTasks() {
-    const { data, error } = await supabase.from('daily_tasks').select('*').eq('owner_id', ownerId).or(`and(status.eq.todo,task_date.eq.${date}),and(status.eq.wip,task_date.lte.${date}),and(status.eq.completed,task_date.eq.${date}),and(status.eq.completed,completed_at.gte.${date}T00:00:00,completed_at.lt.${date}T23:59:59.999)`).order('task_date')
+    const end = nextDate(date)
+    const { data, error } = await supabase.from('daily_tasks').select('*').eq('owner_id', ownerId)
+      .or(`and(status.in.(todo,wip),task_date.lte.${date}),and(status.eq.completed,completed_at.gte.${date}T00:00:00Z,completed_at.lt.${end}T00:00:00Z)`)
+      .order('task_date')
     if (error) { setNotice(error.message); return }
     setTasks(data || [])
     const ids = (data || []).map(task => task.id)
@@ -50,53 +77,85 @@ export default function PostXDaily({ user }) {
     if (!result.error) setComments((result.data || []).reduce((all, item) => ({ ...all, [item.task_id]: [...(all[item.task_id] || []), item] }), {}))
   }
 
-  const grouped = useMemo(() => ({
-    todo: tasks.filter(t => t.status === 'todo' && t.task_date === date),
-    wip: tasks.filter(t => t.status === 'wip' && t.task_date <= date),
-    completed: tasks.filter(t => t.status === 'completed' && (t.task_date === date || t.completed_at?.slice(0, 10) === date)),
-  }), [tasks, date])
+  const grouped = useMemo(() => Object.fromEntries(STATUSES.map(({ value }) => [value, tasks.filter(task => task.status === value)])), [tasks])
 
-  function openCreate() { setActive(null); setForm(blankTask(date)); setDialog('edit') }
-  function openEdit(task) { setActive(task); setForm({ title: task.title, description: task.description || '', notes: task.notes || '', task_date: task.task_date }); setDialog('edit') }
+  function openCreate() { setActive(null); setForm(blankTask(date)); setEditing(true) }
+  function openEdit(task) {
+    setActive(task)
+    setForm({
+      title: task.title, description: task.description || '', notes: task.notes || '', task_date: task.task_date,
+      status: task.status, wip_tag: task.wip_tag || '', progress_comment: '', action_taken: task.action_taken || '', completion_comment: task.completion_comment || '',
+    })
+    setEditing(true)
+  }
+  function close() { setEditing(false); setActive(null); setForm(blankTask(date)) }
+
   async function saveTask(event) {
     event.preventDefault()
-    const payload = { ...form, owner_id: ownerId, updated_by: user.id, ...(active ? {} : { status: 'todo', created_by: user.id }) }
-    const result = active ? await supabase.from('daily_tasks').update(payload).eq('id', active.id) : await supabase.from('daily_tasks').insert(payload)
-    if (result.error) setNotice(result.error.message); else { setNotice(active ? 'Task updated.' : 'Task created.'); close(); loadTasks() }
+    const wasCompleted = active?.status === 'completed'
+    const isCompleted = form.status === 'completed'
+    const completedAt = isCompleted ? (wasCompleted ? active.completed_at || new Date().toISOString() : new Date().toISOString()) : null
+    const payload = {
+      title: form.title, description: form.description, notes: form.notes, task_date: form.task_date,
+      status: form.status, wip_tag: form.wip_tag || null, action_taken: form.action_taken || null,
+      completion_comment: form.completion_comment || null, completed_at: completedAt, owner_id: ownerId, updated_by: user.id,
+      ...(form.status === 'wip' && active?.status !== 'wip' ? { moved_to_wip_at: new Date().toISOString() } : {}),
+      ...(active ? {} : { created_by: user.id }),
+    }
+    const result = active ? await supabase.from('daily_tasks').update(payload).eq('id', active.id) : await supabase.from('daily_tasks').insert(payload).select().single()
+    if (result.error) { setNotice(result.error.message); return }
+    const taskId = active?.id || result.data?.id
+    if (form.progress_comment.trim() && taskId) {
+      const commentResult = await supabase.from('daily_task_comments').insert({ task_id: taskId, user_id: user.id, comment_type: 'progress', comment: form.progress_comment.trim() })
+      if (commentResult.error) setNotice(`Task saved, but progress update failed: ${commentResult.error.message}`)
+    }
+    if (isCompleted && !wasCompleted && taskId && (form.action_taken || form.completion_comment)) {
+      await supabase.from('daily_task_comments').insert({ task_id: taskId, user_id: user.id, comment_type: 'completion', comment: form.completion_comment || 'Task completed.', action_taken: form.action_taken || null })
+    }
+    setNotice(active ? 'Task updated.' : 'Task created.')
+    close(); loadTasks()
   }
-  async function move(task, status) {
-    const payload = { status, updated_by: user.id, completed_at: null }
-    if (status === 'wip') payload.moved_to_wip_at = new Date().toISOString()
+
+  async function updateStatus(task, status) {
+    if (status === task.status) return
+    setSavingStatus(task.id)
+    const previous = tasks
+    const completedAt = status === 'completed' ? new Date().toISOString() : null
+    setTasks(current => current.map(item => item.id === task.id ? { ...item, status, completed_at: completedAt } : item).filter(item => item.status !== 'completed' || item.completed_at?.slice(0, 10) === date))
+    const payload = { status, completed_at: completedAt, updated_by: user.id, ...(status === 'wip' ? { moved_to_wip_at: new Date().toISOString() } : {}) }
     const { error } = await supabase.from('daily_tasks').update(payload).eq('id', task.id)
-    if (!error && task.status === 'completed') await supabase.from('daily_task_comments').insert({ task_id: task.id, user_id: user.id, comment_type: 'reopen', comment: `Moved back to ${status === 'wip' ? 'WIP' : 'To Do'}.`, action_taken: task.action_taken, time_taken: task.time_taken })
-    setNotice(error?.message || `Task moved to ${status === 'wip' ? 'WIP' : 'To Do'}.`); close(); loadTasks()
+    if (error) { setTasks(previous); setNotice(error.message) } else {
+      if (task.status === 'completed') await supabase.from('daily_task_comments').insert({ task_id: task.id, user_id: user.id, comment_type: 'reopen', comment: `Moved back to ${statusLabel(status)}.` })
+      setNotice(`Task moved to ${statusLabel(status)}.`)
+      loadTasks()
+    }
+    setSavingStatus('')
   }
-  async function addProgress(event) {
-    event.preventDefault()
-    const { error } = await supabase.from('daily_task_comments').insert({ task_id: active.id, user_id: user.id, comment_type: 'progress', ...progress })
-    setNotice(error?.message || 'Progress saved.'); if (!error) { setProgress({ comment: '', action_taken: '' }); loadTasks() }
+
+  async function updateTag(task, wipTag) {
+    const previous = tasks
+    setTasks(current => current.map(item => item.id === task.id ? { ...item, wip_tag: wipTag } : item))
+    const { error } = await supabase.from('daily_tasks').update({ wip_tag: wipTag || null, updated_by: user.id }).eq('id', task.id)
+    if (error) { setTasks(previous); setNotice(error.message) } else setNotice('WIP tag updated.')
   }
-  async function complete(event) {
-    event.preventDefault()
-    const task = grouped.wip.find(item => item.id === completion.task_id)
-    if (!task) return
-    const completedAt = new Date().toISOString()
-    const { error } = await supabase.from('daily_tasks').update({ status: 'completed', completed_at: completedAt, time_taken: completion.time_taken, action_taken: completion.action_taken, completion_comment: completion.completion_comment, updated_by: user.id }).eq('id', task.id)
-    if (!error) await supabase.from('daily_task_comments').insert({ task_id: task.id, user_id: user.id, comment_type: 'completion', comment: completion.completion_comment || 'Task completed.', action_taken: completion.action_taken, time_taken: completion.time_taken })
-    setNotice(error?.message || 'Task completed.'); if (!error) { close(); loadTasks() }
-  }
-  function close() { setDialog(null); setActive(null); setCompletion({ task_id: '', time_taken: '', action_taken: '', completion_comment: '' }) }
 
   async function exportPdf() {
     if (exportDates.start > exportDates.end) { setNotice('Export start date must be before the end date.'); return }
-    const { data, error } = await supabase.from('daily_tasks').select('*, daily_task_comments(*)').eq('owner_id', ownerId).gte('task_date', exportDates.start).lte('task_date', exportDates.end).order('task_date')
+    const { data, error } = await supabase.from('daily_tasks').select('*, daily_task_comments(*)').eq('owner_id', ownerId).lte('task_date', exportDates.end).order('task_date')
     if (error) { setNotice(error.message); return }
-    const owner = profiles.find(p => p.id === ownerId) || (ownerId === user.id ? profile : null)
+    const exportEnd = `${nextDate(exportDates.end)}T00:00:00Z`
+    const exportStart = `${exportDates.start}T00:00:00Z`
+    const reportTasks = (data || []).filter(task => task.status === 'completed'
+      ? task.completed_at >= exportStart && task.completed_at < exportEnd
+      : task.task_date <= exportDates.end)
+    const owner = profiles.find(item => item.id === ownerId) || (ownerId === user.id ? profile : null)
     const escape = value => String(value || '—').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
-    const sections = ['todo', 'wip', 'completed'].map(status => {
-      const rows = (data || []).filter(t => t.status === status)
-      const items = rows.map(t => `<article><h3>${escape(t.title)}</h3><p><b>Status:</b> ${escape(t.status)} · <b>Task date:</b> ${escape(t.task_date)}</p><p><b>Description:</b> ${escape(t.description)}</p><p><b>Notes:</b> ${escape(t.notes)}</p>${(t.daily_task_comments || []).filter(c => c.comment_type === 'progress').map(c => `<p><b>Progress:</b> ${escape(c.comment)}${c.action_taken ? ` — ${escape(c.action_taken)}` : ''}</p>`).join('')}${status === 'completed' ? `<p><b>Time taken:</b> ${escape(t.time_taken)}</p><p><b>Action taken:</b> ${escape(t.action_taken)}</p><p><b>Completion notes:</b> ${escape(t.completion_comment)}</p><p><b>Completed:</b> ${escape(t.completed_at ? new Date(t.completed_at).toLocaleString() : '')}</p>` : ''}</article>`).join('')
-      return `<section><h2>${status === 'todo' ? 'To Do Tasks' : status === 'wip' ? 'WIP Tasks' : 'Completed Tasks'}</h2>${items || '<p>No tasks.</p>'}</section>`
+    const sections = STATUSES.map(({ value: status, label }) => {
+      const items = reportTasks.filter(task => task.status === status).map(task => {
+        const progress = (task.daily_task_comments || []).filter(comment => comment.comment_type === 'progress').map(comment => `<p><b>Progress:</b> ${escape(comment.comment)}${comment.action_taken ? ` — ${escape(comment.action_taken)}` : ''}</p>`).join('')
+        return `<article><h3>${escape(task.title)}</h3><p><b>Status:</b> ${label} · <b>Task date:</b> ${escape(task.task_date)}</p><p><b>Description:</b> ${escape(task.description)}</p><p><b>Notes:</b> ${escape(task.notes)}</p>${task.wip_tag ? `<p><b>WIP tag:</b> ${escape(task.wip_tag)}</p>` : ''}${progress}${status === 'completed' ? `<p><b>Action taken:</b> ${escape(task.action_taken)}</p><p><b>Completion notes:</b> ${escape(task.completion_comment)}</p><p><b>Completed:</b> ${escape(task.completed_at ? new Date(task.completed_at).toLocaleString() : '')}</p><p><b>Time taken:</b> ${escape(formatDuration(task.created_at, task.completed_at))}</p>` : ''}</article>`
+      }).join('')
+      return `<section><h2>${label} Tasks</h2>${items || '<p>No tasks.</p>'}</section>`
     }).join('')
     const report = window.open('', '_blank')
     if (!report) { setNotice('Allow popups to open the printable report.'); return }
@@ -104,26 +163,53 @@ export default function PostXDaily({ user }) {
     report.document.close(); setNotice('Printable PDF report opened.')
   }
 
-  const TaskList = ({ rows, completed = false }) => <div className="task-list">{rows.map(task => <article className="task-row" key={task.id}><div><h4>{task.title}</h4><small>{task.task_date}{task.task_date < date && task.status === 'wip' ? ' · Carried over' : ''}</small><p>{task.description}</p></div><div className="record-actions"><button onClick={() => { setActive(task); setDialog(completed ? 'completed-detail' : 'detail') }}>View</button><button className="secondary" onClick={() => openEdit(task)}>Edit</button>{task.status === 'todo' && <button onClick={() => move(task, 'wip')}>Move to WIP</button>}</div></article>)}{!rows.length && <p className="muted">No tasks in this section.</p>}</div>
-
   return <section className="postx-daily">
-    <div className="daily-controls form-card"><label>Selected date<input type="date" value={date} onChange={e => setDate(e.target.value)} /></label>{isManager && <label>Team member<select value={ownerId} onChange={e => setOwnerId(e.target.value)}><option value={user.id}>My Tasks</option>{profiles.filter(p => p.id !== user.id).map(p => <option key={p.id} value={p.id}>{displayName(p)}</option>)}</select></label>}</div>
-    {notice && <p className="notice">{notice}</p>}
-    <DailyCard title="Create Task" count={grouped.todo.length}><button onClick={openCreate}>Create Task</button><button className="secondary" onClick={() => setDialog('todo')}>View Tasks</button></DailyCard>
-    <DailyCard title="WIP" count={grouped.wip.length}><button className="secondary" onClick={() => setDialog('wip')}>View Tasks</button><button onClick={() => setDialog('complete')}>Completed</button></DailyCard>
-    <DailyCard title="Completed Tasks" count={grouped.completed.length}><button onClick={() => setDialog('completed')}>View Completed Tasks</button></DailyCard>
-    <div className="form-card export-card"><h2>Export to PDF</h2><div className="export-fields"><label>Start date<input type="date" value={exportDates.start} onChange={e => setExportDates({ ...exportDates, start: e.target.value })} /></label><label>End date<input type="date" value={exportDates.end} onChange={e => setExportDates({ ...exportDates, end: e.target.value })} /></label></div><button onClick={exportPdf}>Print / Save as PDF</button></div>
-    {dialog && <div className="modal" role="dialog" aria-modal="true"><div className="form-card daily-modal"><button className="close" aria-label="Close" onClick={close}>×</button>
-      {dialog === 'edit' && <form onSubmit={saveTask}><h2>{active ? 'Edit Task' : 'Create Task'}</h2><label>Task title<input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} required /></label><label>Description<textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /></label><label>Optional notes<textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></label><label>Task date<input type="date" value={form.task_date} onChange={e => setForm({ ...form, task_date: e.target.value })} required /></label><button>Save Task</button><button type="button" className="secondary" onClick={close}>Cancel</button></form>}
-      {dialog === 'todo' && <><h2>To Do — {date}</h2><TaskList rows={grouped.todo} /></>}
-      {dialog === 'wip' && <><h2>WIP through {date}</h2><TaskList rows={grouped.wip} /></>}
-      {dialog === 'completed' && <><h2>Completed — {date}</h2><TaskList rows={grouped.completed} completed /></>}
-      {dialog === 'detail' && active && <><TaskDetails task={active} comments={comments[active.id]} /><form onSubmit={addProgress}><h3>Add progress</h3><label>Comment<textarea value={progress.comment} onChange={e => setProgress({ ...progress, comment: e.target.value })} required /></label><label>Optional action/update note<input value={progress.action_taken} onChange={e => setProgress({ ...progress, action_taken: e.target.value })} /></label><button>Save Comment</button></form></>}
-      {dialog === 'complete' && <form onSubmit={complete}><h2>Complete a WIP Task</h2><label>WIP task<select value={completion.task_id} onChange={e => setCompletion({ ...completion, task_id: e.target.value })} required><option value="">Select a task</option>{grouped.wip.map(t => <option value={t.id} key={t.id}>{t.title} ({t.task_date})</option>)}</select></label><label>Time taken<input value={completion.time_taken} onChange={e => setCompletion({ ...completion, time_taken: e.target.value })} placeholder="e.g. 1 hour 30 minutes" required /></label><label>Action taken<textarea value={completion.action_taken} onChange={e => setCompletion({ ...completion, action_taken: e.target.value })} required /></label><label>Completion comment / notes<textarea value={completion.completion_comment} onChange={e => setCompletion({ ...completion, completion_comment: e.target.value })} /></label><button>Mark Completed</button></form>}
-      {dialog === 'completed-detail' && active && <><TaskDetails task={active} comments={comments[active.id]} completion /><div className="actions"><button onClick={() => move(active, 'wip')}>Move back to WIP</button><button className="secondary" onClick={() => move(active, 'todo')}>Move back to To Do</button></div></>}
+    <div className="daily-controls form-card">
+      <label>Selected date<input type="date" value={date} onChange={event => setDate(event.target.value)} /></label>
+      {isManager && <label>Team member<select value={ownerId} onChange={event => setOwnerId(event.target.value)}><option value={user.id}>My Tasks</option>{profiles.filter(item => item.id !== user.id).map(item => <option key={item.id} value={item.id}>{displayName(item)}</option>)}</select></label>}
+      <button className="create-task" onClick={openCreate}>Create Task</button>
+    </div>
+    {notice && <p className="notice" role="status">{notice}</p>}
+    <div className="kanban-board">
+      {STATUSES.map(({ value, label }) => <section className={`kanban-column kanban-${value}`} key={value}>
+        <header><h2>{label}</h2><span className="task-count">{grouped[value].length}</span></header>
+        <div className="kanban-tasks">{grouped[value].map(task => <TaskCard key={task.id} task={task} selectedDate={date} saving={savingStatus === task.id} onStatus={updateStatus} onTag={updateTag} onEdit={openEdit} />)}
+          {!grouped[value].length && <p className="kanban-empty">No {label.toLowerCase()} tasks.</p>}
+        </div>
+      </section>)}
+    </div>
+    <div className="form-card export-card"><h2>Export to PDF</h2><div className="export-fields"><label>Start date<input type="date" value={exportDates.start} onChange={event => setExportDates({ ...exportDates, start: event.target.value })} /></label><label>End date<input type="date" value={exportDates.end} onChange={event => setExportDates({ ...exportDates, end: event.target.value })} /></label></div><button onClick={exportPdf}>Print / Save as PDF</button></div>
+    {editing && <div className="modal" role="dialog" aria-modal="true" aria-labelledby="task-form-title"><div className="form-card daily-modal"><button className="close" aria-label="Close" onClick={close}>×</button>
+      <form onSubmit={saveTask}><h2 id="task-form-title">{active ? 'Edit Task' : 'Create Task'}</h2>
+        <div className="task-form-grid"><label>Task title<input value={form.title} onChange={event => setForm({ ...form, title: event.target.value })} required /></label><label>Task date<input type="date" value={form.task_date} onChange={event => setForm({ ...form, task_date: event.target.value })} required /></label></div>
+        <label>Description<textarea rows="3" value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} /></label>
+        <label>Notes<textarea rows="3" value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} /></label>
+        <div className="task-form-grid"><label>Status<select value={form.status} onChange={event => setForm({ ...form, status: event.target.value })}>{STATUSES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+          <label>WIP tag <span className="optional">(optional)</span><select value={form.wip_tag} onChange={event => setForm({ ...form, wip_tag: event.target.value })} disabled={form.status !== 'wip'}><option value="">No tag</option>{WIP_TAGS.map(tag => <option key={tag}>{tag}</option>)}</select></label></div>
+        <label>Progress comment / update <span className="optional">(optional)</span><textarea rows="2" value={form.progress_comment} onChange={event => setForm({ ...form, progress_comment: event.target.value })} placeholder="Add a new progress update" /></label>
+        <label>Action taken / completion note <span className="optional">(optional)</span><textarea rows="2" value={form.action_taken} onChange={event => setForm({ ...form, action_taken: event.target.value })} /></label>
+        <label>Completion comment <span className="optional">(optional)</span><textarea rows="2" value={form.completion_comment} onChange={event => setForm({ ...form, completion_comment: event.target.value })} /></label>
+        {active && <Activity comments={comments[active.id]} />}
+        <div className="actions"><button>{active ? 'Save Changes' : 'Create Task'}</button><button type="button" className="secondary" onClick={close}>Cancel</button></div>
+      </form>
     </div></div>}
   </section>
 }
 
-function DailyCard({ title, count, children }) { return <article className="daily-card"><div><h2>{title}</h2><span className="task-count">{count} task{count === 1 ? '' : 's'}</span></div><div className="actions">{children}</div></article> }
-function TaskDetails({ task, comments = [], completion }) { return <div className="task-details"><h2>{task.title}</h2><p><strong>Task date:</strong> {task.task_date}</p><p><strong>Description:</strong> {task.description || '—'}</p><p><strong>Notes:</strong> {task.notes || '—'}</p>{completion && <><p><strong>Completion comment:</strong> {task.completion_comment || '—'}</p><p><strong>Time taken:</strong> {task.time_taken || '—'}</p><p><strong>Action taken:</strong> {task.action_taken || '—'}</p><p><strong>Completed:</strong> {task.completed_at ? new Date(task.completed_at).toLocaleString() : '—'}</p></>}<h3>Activity</h3>{comments.map(c => <div className="comment" key={c.id}><strong>{c.comment_type}</strong><small>{new Date(c.created_at).toLocaleString()}</small><p>{c.comment}</p>{c.action_taken && <p>Update: {c.action_taken}</p>}</div>)}{!comments.length && <p className="muted">No activity yet.</p>}</div> }
+function TaskCard({ task, selectedDate, saving, onStatus, onTag, onEdit }) {
+  const carried = task.task_date < selectedDate && task.status !== 'completed'
+  return <article className={`kanban-task task-${task.status}`}>
+    <div className="task-card-heading"><h3>{task.title}</h3>{task.wip_tag && <span className="tag-pill">{task.wip_tag}</span>}</div>
+    <p>{task.description || <span className="muted">No description</span>}</p>
+    <small>{task.task_date}{carried ? ' · Carried over' : ''}</small>
+    {task.status === 'completed' && task.completed_at && <p className="time-taken"><strong>Time taken:</strong> {formatDuration(task.created_at, task.completed_at)}</p>}
+    <label className="compact-field">Status<select aria-label={`Status for ${task.title}`} value={task.status} disabled={saving} onChange={event => onStatus(task, event.target.value)}>{STATUSES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+    {task.status === 'wip' && <label className="compact-field">WIP tag<select aria-label={`WIP tag for ${task.title}`} value={task.wip_tag || ''} onChange={event => onTag(task, event.target.value)}><option value="">No tag</option>{WIP_TAGS.map(tag => <option key={tag}>{tag}</option>)}</select></label>}
+    <button className="secondary edit-task" onClick={() => onEdit(task)}>Edit</button>
+  </article>
+}
+
+function Activity({ comments = [] }) {
+  if (!comments.length) return null
+  return <details className="activity"><summary>Activity ({comments.length})</summary>{comments.map(comment => <div className="comment" key={comment.id}><strong>{statusLabel(comment.comment_type)}</strong><small>{new Date(comment.created_at).toLocaleString()}</small><p>{comment.comment}</p>{comment.action_taken && <p>Update: {comment.action_taken}</p>}</div>)}</details>
+}
