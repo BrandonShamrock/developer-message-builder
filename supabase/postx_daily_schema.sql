@@ -21,6 +21,7 @@ create table if not exists public.daily_tasks (
   title text not null check (length(trim(title)) > 0),
   description text,
   notes text,
+  wip_tag text,
   status text not null default 'todo' check (status in ('todo', 'wip', 'completed')),
   task_date date not null default current_date,
   time_taken text,
@@ -33,6 +34,9 @@ create table if not exists public.daily_tasks (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Keep existing PostX Daily installations in sync with the current task fields.
+alter table public.daily_tasks add column if not exists wip_tag text;
 
 create table if not exists public.daily_task_comments (
   id uuid primary key default gen_random_uuid(),
