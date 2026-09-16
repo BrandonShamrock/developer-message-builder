@@ -118,3 +118,23 @@ section { display: grid; gap: 1rem; }
 .transfer-modal { width: min(560px, 100%) !important; }
 @media (max-width: 900px) { .kanban-board { grid-template-columns: 1fr; } .kanban-column { display: grid; } }
 @media (max-width: 620px) { .daily-controls, .export-fields, .task-form-grid { grid-template-columns: 1fr; } .daily-controls { display: grid; } .daily-controls label { width: 100%; } .daily-controls .create-task { margin: 0; width: 100%; } .daily-card, .task-row { align-items: stretch; display: grid; } .daily-card .actions button { width: 100%; } }
+
+/* CRM is intentionally separate from the template/dealer Clients UI. */
+.crm-page { max-width: 1400px; }
+.crm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 1rem; }
+.crm-grid > .empty-state { grid-column: 1 / -1; }
+.crm-card { display: grid; align-content: start; gap: 1rem; min-width: 0; padding: 1.2rem; border: 1px solid #cddbed; border-radius: 18px; background: linear-gradient(145deg, #fff 0%, #f3f8ff 100%); box-shadow: 0 12px 28px rgba(38, 72, 120, .08); }
+.crm-card h2 { margin: .45rem 0 0; font-size: 1.2rem; overflow-wrap: anywhere; }
+.crm-group { display: inline-block; padding: .25rem .55rem; border-radius: 99px; background: #e1ebff; color: #294e8c; font-size: .78rem; font-weight: 800; }
+.crm-card dl { display: grid; gap: .65rem; margin: 0; }
+.crm-card dl div { min-width: 0; }
+.crm-card dt { color: var(--muted); font-size: .75rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.crm-card dd { margin: .12rem 0 0; overflow-wrap: anywhere; white-space: pre-line; }
+.crm-card a { color: #2546aa; }
+.crm-card .actions { align-self: end; margin-top: auto; }
+.crm-modal-backdrop { z-index: 20; }
+.crm-modal { width: min(760px, 100%) !important; max-height: 92vh !important; background: white; }
+.crm-modal form > h2 { margin-top: 0; padding-right: 3rem; }
+.crm-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.group-hint { margin: -.45rem 0 1rem; color: #315f49; font-size: .85rem; }
+@media (max-width: 620px) { .crm-form-grid { grid-template-columns: 1fr; gap: 0; } .crm-modal { padding: 1rem; } }

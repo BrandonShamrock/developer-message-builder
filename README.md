@@ -10,6 +10,7 @@ Internal React app for creating, saving, editing, deleting, reusing, previewing,
 - Client CRUD for reusable client and brand metadata.
 - Builder workflow that combines a selected template and client, auto-fills matching variables, requests manual values for missing fields, previews the final message, warns about missing values, copies to clipboard, and saves generated output.
 - Generated message history with view, copy, and delete actions.
+- A separate CRM module for searchable client records, reusable groups, and group discount defaults.
 - Plain CSS responsive layout suitable for Netlify or GitHub Pages deployment.
 
 ## Tech Stack
@@ -125,3 +126,16 @@ New users receive an `agent` profile when they first open PostX Daily if a profi
 ### PDF reports
 
 The export opens a print-optimised report in a new browser tab and opens the system print dialog. Choose **Save as PDF** as the printer destination. If the tab does not open, allow popups for the app's origin.
+
+## CRM Setup
+
+The CRM stores business and contact details, addresses, group membership, and numeric group discounts. It is deliberately separate from the existing `clients` table: that table continues to supply template/dealer variables to the message Builder, while `crm_clients` and `crm_groups` provide a clean data source for a future Quote Builder. The Quote Builder itself is not part of this release.
+
+Manual Supabase setup is required:
+
+1. Sign in to the Supabase dashboard for the app's project.
+2. Open **SQL Editor**, choose **New query**, and paste the complete contents of [`supabase/crm_schema.sql`](supabase/crm_schema.sql).
+3. Run the query and confirm that `crm_groups` and `crm_clients` appear in **Table Editor**.
+4. Confirm Row Level Security is enabled on both tables, then sign in to the app and open **CRM**.
+
+The SQL creates only new CRM tables, indexes, timestamp triggers, and authenticated-user policies. It does not modify the existing `clients` table or weaken policies on any existing feature. Version 1 permits any authenticated user to delete CRM records; restricting deletion to managers is a possible future hardening improvement.

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { supabase, isSupabaseConfigured } from './supabase'
 import { buildMessage, detectVariables, getUserId } from './utils'
 import PostXDaily from './PostXDaily'
+import CRM from './CRM'
 import './styles.css'
 
 const pages = [
@@ -12,6 +13,7 @@ const pages = [
   ['builder', 'Builder'],
   ['history', 'Generated History'],
   ['postx-daily', 'PostX Daily'],
+  ['crm', 'CRM'],
 ]
 
 const emptyTemplate = { name: '', category: '', description: '', template_body: '', variables: [] }
@@ -111,11 +113,11 @@ function Login() {
 }
 
 function Shell({ user, page, setPage }) {
-  return <div className="app-shell"><aside className="sidebar"><h2>Message Builder</h2><nav>{pages.map(([key, label]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => setPage(key)}>{label}</button>)}</nav><button className="logout" onClick={() => supabase.auth.signOut()}>Logout</button></aside><main><header><div><h1>{pages.find(p => p[0] === page)?.[1]}</h1><p>{user.email}</p></div></header>{page === 'dashboard' && <Dashboard setPage={setPage} />}{page === 'templates' && <Templates user={user} />}{page === 'clients' && <Clients user={user} />}{page === 'builder' && <Builder user={user} />}{page === 'history' && <History />}{page === 'postx-daily' && <PostXDaily user={user} />}</main></div>
+  return <div className="app-shell"><aside className="sidebar"><h2>Message Builder</h2><nav>{pages.map(([key, label]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => setPage(key)}>{label}</button>)}</nav><button className="logout" onClick={() => supabase.auth.signOut()}>Logout</button></aside><main><header><div><h1>{pages.find(p => p[0] === page)?.[1]}</h1><p>{user.email}</p></div></header>{page === 'dashboard' && <Dashboard setPage={setPage} />}{page === 'templates' && <Templates user={user} />}{page === 'clients' && <Clients user={user} />}{page === 'builder' && <Builder user={user} />}{page === 'history' && <History />}{page === 'postx-daily' && <PostXDaily user={user} />}{page === 'crm' && <CRM user={user} />}</main></div>
 }
 
 function Dashboard({ setPage }) {
-  return <div className="grid cards">{pages.slice(1).map(([key, label]) => <button className="card" key={key} onClick={() => setPage(key)}><h3>{label}</h3><p>Manage {label.toLowerCase()}.</p></button>)}</div>
+  return <div className="grid cards">{pages.slice(1).map(([key, label]) => <button className="card" key={key} onClick={() => setPage(key)}><h3>{label}</h3><p>{key === 'crm' ? 'Manage client records for future quote building.' : `Manage ${label.toLowerCase()}.`}</p></button>)}</div>
 }
 
 function Templates({ user }) {
