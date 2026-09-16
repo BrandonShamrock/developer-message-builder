@@ -1,6 +1,6 @@
-# Developer Message Builder
+# Amper Besig
 
-Internal React app for creating, saving, editing, deleting, reusing, previewing, copying, and storing OpenAI developer message templates. Version 1 intentionally does **not** integrate with the OpenAI API; it only generates developer message text for copying into the OpenAI dashboard.
+Internal React app bringing together OpenAI developer message templates, dealer/client records, PostX Daily task management, and CRM client management, with groundwork for a future quote builder. The template builder intentionally does **not** integrate with the OpenAI API; it only generates developer message text for copying into the OpenAI dashboard.
 
 ## Features
 

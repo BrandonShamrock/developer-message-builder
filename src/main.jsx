@@ -6,6 +6,8 @@ import PostXDaily from './PostXDaily'
 import CRM from './CRM'
 import './styles.css'
 
+const APP_NAME = 'Amper Besig'
+
 const pages = [
   ['dashboard', 'Dashboard'],
   ['templates', 'Templates'],
@@ -27,6 +29,11 @@ function App() {
   const [user, setUser] = useState(null)
   const [loadingAuth, setLoadingAuth] = useState(true)
   const [page, setPage] = useState('dashboard')
+
+  useEffect(() => {
+    const pageName = pages.find(([key]) => key === page)?.[1]
+    document.title = user && pageName ? `${pageName} | ${APP_NAME}` : APP_NAME
+  }, [page, user])
 
   useEffect(() => {
     if (!isSupabaseConfigured) { setLoadingAuth(false); return }
@@ -97,7 +104,7 @@ function Login() {
   }
 
   return <div className="login-page"><form className="auth-card" onSubmit={submit}>
-    <h1>Developer Message Builder</h1>
+    <h1>{APP_NAME}</h1>
     <div className="auth-switch" role="tablist" aria-label="Authentication mode">
       <button type="button" role="tab" aria-selected={!isCreateAccount} className={!isCreateAccount ? 'active' : ''} onClick={() => switchMode('sign-in')}>Sign In</button>
       <button type="button" role="tab" aria-selected={isCreateAccount} className={isCreateAccount ? 'active' : ''} onClick={() => switchMode('create-account')}>Create Account</button>
@@ -113,7 +120,8 @@ function Login() {
 }
 
 function Shell({ user, page, setPage }) {
-  return <div className="app-shell"><aside className="sidebar"><h2>Message Builder</h2><nav>{pages.map(([key, label]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => setPage(key)}>{label}</button>)}</nav><button className="logout" onClick={() => supabase.auth.signOut()}>Logout</button></aside><main><header><div><h1>{pages.find(p => p[0] === page)?.[1]}</h1><p>{user.email}</p></div></header>{page === 'dashboard' && <Dashboard setPage={setPage} />}{page === 'templates' && <Templates user={user} />}{page === 'clients' && <Clients user={user} />}{page === 'builder' && <Builder user={user} />}{page === 'history' && <History />}{page === 'postx-daily' && <PostXDaily user={user} />}{page === 'crm' && <CRM user={user} />}</main></div>
+  const pageTitle = page === 'dashboard' ? APP_NAME : pages.find(p => p[0] === page)?.[1]
+  return <div className="app-shell"><aside className="sidebar"><h2>{APP_NAME}</h2><nav>{pages.map(([key, label]) => <button key={key} className={page === key ? 'active' : ''} onClick={() => setPage(key)}>{label}</button>)}</nav><button className="logout" onClick={() => supabase.auth.signOut()}>Logout</button></aside><main><header><div><h1>{pageTitle}</h1><p>{user.email}</p></div></header>{page === 'dashboard' && <Dashboard setPage={setPage} />}{page === 'templates' && <Templates user={user} />}{page === 'clients' && <Clients user={user} />}{page === 'builder' && <Builder user={user} />}{page === 'history' && <History />}{page === 'postx-daily' && <PostXDaily user={user} />}{page === 'crm' && <CRM user={user} />}</main></div>
 }
 
 function Dashboard({ setPage }) {
