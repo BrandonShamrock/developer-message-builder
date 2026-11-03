@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Creates and destroys ONLY a disposable Docker PostgreSQL instance.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+container="amper-besig-tests-$$"
+docker_local() {
+  env -u DOCKER_HOST -u DOCKER_CONTEXT -u DOCKER_TLS -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH docker --host=unix:///var/run/docker.sock "$@"
+}
+cleanup() { docker_local rm -f "$container" >/dev/null; }
+trap cleanup EXIT
+docker_local run -d --name "$container" -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17 >/dev/null
+ready=false
+for attempt in {1..30}; do
+  if docker_local exec "$container" pg_isready -U postgres >/dev/null 2>&1; then ready=true; break; fi
+  sleep 1
+done
+if [ "$ready" != true ]; then docker_local logs "$container"; exit 1; fi
+pgtest() { docker_local exec -i "$container" psql -U postgres -v ON_ERROR_STOP=1 "$@"; }
+pgtest < tests/database-bootstrap.sql
+for file in supabase/postx_daily_schema.sql supabase/postx_daily_kanban_update.sql supabase/postx_daily_transfer_update.sql supabase/crm_schema.sql; do pgtest < "$file"; done
+pgtest -c "insert into daily_tasks(owner_id,title,status,created_by,completed_at) values('22222222-2222-2222-2222-222222222222','Legacy completed','completed','22222222-2222-2222-2222-222222222222',now());"
+for pass in 1 2; do
+  for file in supabase/amper_besig_ticket_categories_qc.sql supabase/amper_besig_user_preferences.sql supabase/amper_besig_products.sql supabase/amper_besig_quotes.sql; do pgtest < "$file"; done
+done
+pgtest -c "do \$\$ begin assert (select category='Other' and status='completed' from daily_tasks where title='Legacy completed'); end \$\$;"
+pgtest < tests/database.test.sql

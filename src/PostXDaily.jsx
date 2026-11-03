@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { supabase } from './supabase'
+import { CATEGORIES, SETUP_TYPES, QC_MESSAGE, qcProgress, needsQc } from './qc'
 
 const STATUSES = [
   { value: 'todo', label: 'To Do' },
@@ -15,7 +16,7 @@ const nextDate = date => {
   value.setUTCDate(value.getUTCDate() + 1)
   return value.toISOString().slice(0, 10)
 }
-const blankTask = date => ({ title: '', description: '', notes: '', task_date: date, status: 'todo', wip_tag: '', progress_comment: '', action_taken: '', completion_comment: '' })
+const blankTask = date => ({ title: '', description: '', notes: '', task_date: date, status: 'todo', category: '', wip_tag: '', progress_comment: '', action_taken: '', completion_comment: '' })
 const displayName = (profile, user) => profile?.full_name || profile?.email || user?.email || 'User'
 const statusLabel = status => STATUSES.find(item => item.value === status)?.label || status
 
@@ -42,6 +43,11 @@ export default function PostXDaily({ user }) {
   const [editing, setEditing] = useState(false)
   const [active, setActive] = useState(null)
   const [form, setForm] = useState(blankTask(date))
+  const [qc, setQc] = useState({})
+  const [qcLoading, setQcLoading] = useState(false)
+  const [qcError, setQcError] = useState('')
+  const [qcBlocked, setQcBlocked] = useState(null)
+  const qcRequest = React.useRef(0)
   const [exportDates, setExportDates] = useState({ start: date, end: date })
   const [notice, setNotice] = useState('')
   const [savingStatus, setSavingStatus] = useState('')
@@ -154,23 +160,36 @@ export default function PostXDaily({ user }) {
     return [value, matching]
   })), [tasks])
 
-  function openCreate() { setActive(null); setForm(blankTask(date)); setSaveError(''); setEditing(true) }
+  function openCreate() { qcRequest.current++; setQc({}); setQcError(''); setQcLoading(false); setActive(null); setForm(blankTask(date)); setSaveError(''); setEditing(true) }
   function openEdit(task) {
     setActive(task)
     setForm({
       title: task.title, description: task.description || '', notes: task.notes || '', task_date: task.task_date,
-      status: task.status, wip_tag: task.wip_tag || '', progress_comment: '', action_taken: task.action_taken || '', completion_comment: task.completion_comment || '',
+      status: task.status, category: task.category || 'Other', wip_tag: task.wip_tag || '', progress_comment: '', action_taken: task.action_taken || '', completion_comment: task.completion_comment || '',
     })
     setSaveError('')
     setEditing(true)
+    loadQc(task.id)
+  }
+  async function loadQc(taskId) {
+    const request = ++qcRequest.current
+    setQc({}); setQcError(''); setQcLoading(true)
+    const { data, error } = await supabase.from('daily_task_onboarding_qc').select('setup_type,outcome').eq('task_id', taskId)
+    if (request !== qcRequest.current) return
+    if (error) setQcError(`Unable to load QC: ${error.message}`)
+    else setQc(Object.fromEntries((data || []).map(row => [row.setup_type, row.outcome])))
+    setQcLoading(false)
   }
   function close() { if (savingTask) return; setEditing(false); setActive(null); setForm(blankTask(date)); setSaveError('') }
 
   async function saveTask(event) {
     event.preventDefault()
     if (savingTask) return
-    setSavingTask(true)
     setSaveError('')
+    if (!CATEGORIES.includes(form.category)) { setSaveError('Please select a task category.'); return }
+    if (qcLoading || qcError) { setSaveError('QC must load successfully before saving.'); return }
+    if (needsQc(form.category, form.status, qc, active)) { setSaveError(`${QC_MESSAGE} ${qcProgress(qc).outstanding} setup types outstanding.`); document.getElementById('onboarding-qc')?.focus(); return }
+    setSavingTask(true)
     try {
       const wasCompleted = active?.status === 'completed'
       const isCompleted = form.status === 'completed'
@@ -178,7 +197,7 @@ export default function PostXDaily({ user }) {
       const completedAt = isCompleted ? (wasCompleted ? active.completed_at || now : now) : null
       const fields = {
         title: form.title.trim(), description: form.description || null, notes: form.notes || null,
-        task_date: form.task_date, status: form.status, wip_tag: form.wip_tag || null, action_taken: form.action_taken || null,
+        task_date: form.task_date, category: form.category, status: form.status, wip_tag: form.wip_tag || null, action_taken: form.action_taken || null,
         completion_comment: form.completion_comment || null, completed_at: completedAt,
         updated_by: user.id, updated_at: now,
         ...(!active ? { timer_started_at: now } : {}),
@@ -187,11 +206,10 @@ export default function PostXDaily({ user }) {
       }
       // Never take owner_id from editable form data. Agents always own their new
       // tasks, while managers create for the currently selected team member.
-      const result = active
-        ? await supabase.from('daily_tasks').update(fields).eq('id', active.id).select().single()
-        : await supabase.from('daily_tasks').insert({
-          ...fields, owner_id: isManager ? ownerId : user.id, created_by: user.id,
-        }).select().single()
+      const result = await supabase.rpc('save_daily_task_with_qc', {
+        p_task_id: active?.id || null, p_fields: fields,
+        p_owner_id: isManager ? ownerId : user.id, p_qc: qc,
+      })
       if (result.error) throw result.error
 
       const taskId = result.data.id
@@ -225,6 +243,12 @@ export default function PostXDaily({ user }) {
 
   async function updateStatus(task, status) {
     if (status === task.status) return
+    if (task.category === 'Onboarding' && status === 'completed') {
+      const { data, error } = await supabase.from('daily_task_onboarding_qc').select('setup_type,outcome').eq('task_id', task.id)
+      if (error) { setNotice(`Unable to check onboarding QC: ${error.message}`); return }
+      const progress = qcProgress(Object.fromEntries((data || []).map(row => [row.setup_type, row.outcome])))
+      if (progress.outstanding) { setQcBlocked({ task, outstanding: progress.outstanding }); return }
+    }
     setSavingStatus(task.id)
     const previous = tasks
     const now = new Date().toISOString()
@@ -262,7 +286,7 @@ export default function PostXDaily({ user }) {
     const sections = STATUSES.map(({ value: status, label }) => {
       const items = reportTasks.filter(task => task.status === status).map(task => {
         const progress = (task.daily_task_comments || []).map(comment => `<p><b>${escape(statusLabel(comment.comment_type))}:</b> ${escape(comment.comment)}${comment.action_taken ? ` — ${escape(comment.action_taken)}` : ''}</p>`).join('')
-        return `<article><h3>${escape(task.title)}</h3><p><b>Status:</b> ${label} · <b>Task date:</b> ${escape(task.task_date)}</p><p><b>Description:</b> ${escape(task.description)}</p><p><b>Notes:</b> ${escape(task.notes)}</p>${task.wip_tag ? `<p><b>WIP tag:</b> ${escape(task.wip_tag)}</p>` : ''}${progress}${status === 'completed' ? `<p><b>Action taken:</b> ${escape(task.action_taken)}</p><p><b>Completion notes:</b> ${escape(task.completion_comment)}</p><p><b>Completed:</b> ${escape(task.completed_at ? new Date(task.completed_at).toLocaleString() : '')}</p><p><b>Time taken:</b> ${escape(formatDuration(task.timer_started_at || task.created_at, task.completed_at))}</p>` : ''}</article>`
+        return `<article><h3>${escape(task.title)}</h3><p><b>Category:</b> ${escape(task.category || 'Other')} · <b>Status:</b> ${label} · <b>Task date:</b> ${escape(task.task_date)}</p><p><b>Description:</b> ${escape(task.description)}</p><p><b>Notes:</b> ${escape(task.notes)}</p>${task.wip_tag ? `<p><b>WIP tag:</b> ${escape(task.wip_tag)}</p>` : ''}${progress}${status === 'completed' ? `<p><b>Action taken:</b> ${escape(task.action_taken)}</p><p><b>Completion notes:</b> ${escape(task.completion_comment)}</p><p><b>Completed:</b> ${escape(task.completed_at ? new Date(task.completed_at).toLocaleString() : '')}</p><p><b>Time taken:</b> ${escape(formatDuration(task.timer_started_at || task.created_at, task.completed_at))}</p>` : ''}</article>`
       }).join('')
       return `<section><h2>${label} Tasks</h2>${items || '<p>No tasks.</p>'}</section>`
     }).join('')
@@ -279,6 +303,7 @@ export default function PostXDaily({ user }) {
       <button className="create-task" onClick={openCreate}>Create Task</button>
     </div>
     {notice && <p className="notice" role="status">{notice}</p>}
+    {qcBlocked && <div className="form-card" role="alert"><p className="error">{QC_MESSAGE} {qcBlocked.outstanding} setup types outstanding.</p><button onClick={() => { openEdit(qcBlocked.task); setQcBlocked(null) }}>Open Onboarding QC checklist</button><button className="secondary" onClick={() => setQcBlocked(null)}>Dismiss</button></div>}
     <div className="notification-bar form-card">
       <div><strong>Notifications {notifications.length ? `(${notifications.length})` : ''}</strong>{!notifications.length && <span className="muted"> No unread transfers</span>}</div>
       <button className="secondary notification-enable" onClick={enableNotifications}>Enable Notifications</button>
@@ -296,17 +321,21 @@ export default function PostXDaily({ user }) {
     <div className="form-card export-card"><h2>Export to PDF</h2><div className="export-fields"><label>Start date<input type="date" value={exportDates.start} onChange={event => setExportDates({ ...exportDates, start: event.target.value })} /></label><label>End date<input type="date" value={exportDates.end} onChange={event => setExportDates({ ...exportDates, end: event.target.value })} /></label></div><button onClick={exportPdf}>Print / Save as PDF</button></div>
     {editing && <div className="modal" role="dialog" aria-modal="true" aria-labelledby="task-form-title"><div className="form-card daily-modal"><button className="close" aria-label="Close" onClick={close}>×</button>
       <form onSubmit={saveTask}><h2 id="task-form-title">{active ? 'Edit Task' : 'Create Task'}</h2>
-        {saveError && <p className="error modal-error" role="alert">{saveError}</p>}
+        {saveError && <div className="error modal-error" role="alert">{saveError}{saveError.includes(QC_MESSAGE) && <button type="button" onClick={() => document.getElementById('onboarding-qc')?.focus()}>Open Onboarding QC checklist</button>}</div>}
         <div className="task-form-grid"><label>Task title<input value={form.title} onChange={event => setForm({ ...form, title: event.target.value })} required /></label><label>Task date<input type="date" value={form.task_date} onChange={event => setForm({ ...form, task_date: event.target.value })} required /></label></div>
+        <label>Category<select aria-label="Category" value={form.category} onChange={event => setForm({ ...form, category: event.target.value })} aria-required="true"><option value="">Select a category</option>{CATEGORIES.map(category => <option key={category}>{category}</option>)}</select></label>
+        {qcLoading && <p role="status">Loading QC…</p>}
+        {qcError && <p className="error" role="alert">{qcError} <button type="button" onClick={() => loadQc(active.id)}>Retry QC</button></p>}
+        {form.category === 'Onboarding' && !qcLoading && !qcError && <OnboardingQc qc={qc} onChange={setQc} disabled={savingTask} />}
         <label>Description<textarea rows="3" value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} /></label>
         <label>Notes<textarea rows="3" value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} /></label>
-        <div className="task-form-grid"><label>Status<select value={form.status} onChange={event => setForm({ ...form, status: event.target.value })}>{STATUSES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+        <div className="task-form-grid"><label>Status<select aria-label="Status" value={form.status} onChange={event => setForm({ ...form, status: event.target.value })}>{STATUSES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
           <label>WIP tag <span className="optional">(optional)</span><select value={form.wip_tag} onChange={event => setForm({ ...form, wip_tag: event.target.value })} disabled={form.status !== 'wip'}><option value="">No tag</option>{WIP_TAGS.map(tag => <option key={tag}>{tag}</option>)}</select></label></div>
         <label>Progress comment / update <span className="optional">(optional)</span><textarea rows="2" value={form.progress_comment} onChange={event => setForm({ ...form, progress_comment: event.target.value })} placeholder="Add a new progress update" /></label>
         <label>Action taken / completion note <span className="optional">(optional)</span><textarea rows="2" value={form.action_taken} onChange={event => setForm({ ...form, action_taken: event.target.value })} /></label>
         <label>Completion comment <span className="optional">(optional)</span><textarea rows="2" value={form.completion_comment} onChange={event => setForm({ ...form, completion_comment: event.target.value })} /></label>
         {active && <Activity comments={comments[active.id]} />}
-        <div className="actions"><button disabled={savingTask}>{savingTask ? 'Saving…' : active ? 'Save Changes' : 'Create Task'}</button><button type="button" className="secondary" onClick={close} disabled={savingTask}>Cancel</button></div>
+        <div className="actions"><button disabled={savingTask || qcLoading || Boolean(qcError)}>{savingTask ? 'Saving…' : active ? 'Save Changes' : 'Create Task'}</button><button type="button" className="secondary" onClick={close} disabled={savingTask}>Cancel</button></div>
       </form>
     </div></div>}
     {transferTask && <div className="modal" role="dialog" aria-modal="true" aria-labelledby="transfer-title"><div className="form-card transfer-modal">
@@ -323,11 +352,13 @@ function TaskCard({ task, selectedDate, saving, onStatus, onTag, onEdit, onTrans
   const carried = task.task_date < selectedDate && task.status !== 'completed'
   return <article className={`kanban-task task-${task.status}`}>
     <div className="task-card-heading"><h3>{task.title}</h3>{task.wip_tag && <span className="tag-pill">{task.wip_tag}</span>}</div>
+    <span className="category-badge">Category: {task.category || 'Other'}</span>
     <p>{task.description || <span className="muted">No description</span>}</p>
     <small>{task.task_date}{carried ? ' · Carried over' : ''}</small>
     {task.status === 'completed' && task.completed_at && <p className="time-taken"><strong>Time taken:</strong> {formatDuration(task.timer_started_at || task.created_at, task.completed_at)}</p>}
     <label className="compact-field">Status<select aria-label={`Status for ${task.title}`} value={task.status} disabled={saving} onChange={event => onStatus(task, event.target.value)}>{STATUSES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
     {task.status === 'wip' && <label className="compact-field">WIP tag<select aria-label={`WIP tag for ${task.title}`} value={task.wip_tag || ''} onChange={event => onTag(task, event.target.value)}><option value="">No tag</option>{WIP_TAGS.map(tag => <option key={tag}>{tag}</option>)}</select></label>}
+    {task.category === 'Onboarding' && <button className="qc-button" onClick={() => onEdit(task)}>Onboarding QC checklist</button>}
     <div className="task-actions"><button className="secondary edit-task" onClick={() => onEdit(task)}>Edit</button>{onTransfer && <button className="transfer-task" title="Transfer task" aria-label={`Transfer ${task.title}`} onClick={() => onTransfer(task)}>⇄ Transfer</button>}</div>
   </article>
 }
@@ -335,4 +366,15 @@ function TaskCard({ task, selectedDate, saving, onStatus, onTag, onEdit, onTrans
 function Activity({ comments = [] }) {
   if (!comments.length) return null
   return <details className="activity"><summary>Activity ({comments.length})</summary>{comments.map(comment => <div className="comment" key={comment.id}><strong>{statusLabel(comment.comment_type)}</strong><small>{new Date(comment.created_at).toLocaleString()}</small><p>{comment.comment}</p>{comment.action_taken && <p>Update: {comment.action_taken}</p>}</div>)}</details>
+}
+
+function OnboardingQc({ qc, onChange, disabled }) {
+  const progress = qcProgress(qc)
+  return <section id="onboarding-qc" className="qc-checklist" tabIndex="-1" aria-label="Onboarding QC checklist">
+    <h3>Onboarding QC: {progress.reviewed} / {SETUP_TYPES.length} Reviewed</h3>
+    <progress value={progress.reviewed} max={SETUP_TYPES.length} aria-label="QC reviewed" />
+    <p>Completed: {progress.completed} · Not Acquired: {progress.notAcquired} · Still Outstanding: {progress.outstanding}</p>
+    <div className="table-scroll"><table><thead><tr><th>Setup Type</th><th>Completed</th><th>Not Acquired</th></tr></thead><tbody>{SETUP_TYPES.map(type => <tr key={type}><th scope="row">{type}</th>{[['completed', 'Completed'], ['not_acquired', 'Not Acquired']].map(([outcome, label]) => <td key={outcome}><input type="checkbox" aria-label={`${type}: ${label}`} disabled={disabled} checked={qc[type] === outcome} onChange={event => onChange({ ...qc, [type]: event.target.checked ? outcome : null })} /></td>)}</tr>)}</tbody></table></div>
+    <p className="hint">Save Changes to keep partial progress. Each row needs one outcome before completion.</p>
+  </section>
 }
