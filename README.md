@@ -1,6 +1,6 @@
 # Amper Besig
 
-Internal React app bringing together OpenAI developer message templates, dealer/client records, PostX Daily task management, and CRM client management, with groundwork for a future quote builder. The template builder intentionally does **not** integrate with the OpenAI API; it only generates developer message text for copying into the OpenAI dashboard.
+Internal React app bringing together OpenAI developer message templates, dealer/client records, PostX Daily task management, and CRM client management, a products catalogue, and CRM-backed quotations. The template builder intentionally does **not** integrate with the OpenAI API; it only generates developer message text for copying into the OpenAI dashboard.
 
 ## Features
 
@@ -11,6 +11,10 @@ Internal React app bringing together OpenAI developer message templates, dealer/
 - Builder workflow that combines a selected template and client, auto-fills matching variables, requests manual values for missing fields, previews the final message, warns about missing values, copies to clipboard, and saves generated output.
 - Generated message history with view, copy, and delete actions.
 - A separate CRM module for searchable client records, reusable groups, and group discount defaults.
+- Required PostX Daily categories and a 17-item onboarding QC checklist with database completion guards.
+- Per-user light/dark/system appearance, accent themes and font sizes.
+- Shared Products catalogue with setup/monthly ZAR prices and archive/restore.
+- CRM-backed Quotes with separate setup/monthly totals, group discounts, historical snapshots and print/PDF output.
 - Plain CSS responsive layout suitable for Netlify or GitHub Pages deployment.
 
 ## Tech Stack
@@ -129,7 +133,7 @@ The export opens a print-optimised report in a new browser tab and opens the sys
 
 ## CRM Setup
 
-The CRM stores business and contact details, addresses, group membership, and numeric group discounts. It is deliberately separate from the existing `clients` table: that table continues to supply template/dealer variables to the message Builder, while `crm_clients` and `crm_groups` provide a clean data source for a future Quote Builder. The Quote Builder itself is not part of this release.
+The CRM stores business and contact details, addresses, group membership, and numeric group discounts. It is deliberately separate from the existing `clients` table: that table continues to supply template/dealer variables to the message Builder, while `crm_clients` and `crm_groups` supply the Quotes feature. Quotes use group discounts without changing them; historical quotations retain their own client and pricing snapshots.
 
 Manual Supabase setup is required:
 
@@ -139,3 +143,7 @@ Manual Supabase setup is required:
 4. Confirm Row Level Security is enabled on both tables, then sign in to the app and open **CRM**.
 
 The SQL creates only new CRM tables, indexes, timestamp triggers, and authenticated-user policies. It does not modify the existing `clients` table or weaken policies on any existing feature. Version 1 permits any authenticated user to delete CRM records; restricting deletion to managers is a possible future hardening improvement.
+
+## Ticket QC, Appearance, Products and Quotes
+
+See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the four new SQL migrations, exact manual Supabase setup order, coordinated release requirements, validation commands and remaining staging checks. Review and run migrations manually before releasing the new frontend. No additional Netlify variables are required.
