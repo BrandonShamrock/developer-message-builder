@@ -23,4 +23,9 @@ for pass in 1 2; do
   for file in supabase/amper_besig_ticket_categories_qc.sql supabase/amper_besig_user_preferences.sql supabase/amper_besig_products.sql supabase/amper_besig_quotes.sql; do pgtest < "$file"; done
 done
 pgtest -c "do \$\$ begin assert (select category='Other' and status='completed' from daily_tasks where title='Legacy completed'); end \$\$;"
+# Seed actual 17-item and VAT-exclusive history before testing the incremental upgrade.
+pgtest < tests/database-legacy-fixture.sql
+for pass in 1 2; do
+  for file in supabase/amper_besig_qc_livechat.sql supabase/amper_besig_quote_vat.sql; do pgtest < "$file"; done
+done
 pgtest < tests/database.test.sql

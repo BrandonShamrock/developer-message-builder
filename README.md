@@ -11,10 +11,10 @@ Internal React app bringing together OpenAI developer message templates, dealer/
 - Builder workflow that combines a selected template and client, auto-fills matching variables, requests manual values for missing fields, previews the final message, warns about missing values, copies to clipboard, and saves generated output.
 - Generated message history with view, copy, and delete actions.
 - A separate CRM module for searchable client records, reusable groups, and group discount defaults.
-- Required PostX Daily categories and a 17-item onboarding QC checklist with database completion guards.
+- Required PostX Daily categories and a 18-item onboarding QC checklist with database completion guards.
 - Per-user light/dark/system appearance, accent themes and font sizes.
 - Shared Products catalogue with setup/monthly ZAR prices and archive/restore.
-- CRM-backed Quotes with separate setup/monthly totals, group discounts, historical snapshots and print/PDF output.
+- CRM-backed Quotes with separate setup/monthly totals, group discounts, historical snapshots, VAT after discount and print/PDF output.
 - Plain CSS responsive layout suitable for Netlify or GitHub Pages deployment.
 
 ## Tech Stack
@@ -147,3 +147,7 @@ The SQL creates only new CRM tables, indexes, timestamp triggers, and authentica
 ## Ticket QC, Appearance, Products and Quotes
 
 See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the four new SQL migrations, exact manual Supabase setup order, coordinated release requirements, validation commands and remaining staging checks. Review and run migrations manually before releasing the new frontend. No additional Netlify variables are required.
+
+## LiveChat QC and quotation VAT update
+
+See [QC_VAT_UPDATE.md](QC_VAT_UPDATE.md) for the two incremental migrations, historical-quote rules, coordinated deployment order and validation. Existing deployments must use these incremental migrations instead of rerunning the original production SQL.
