@@ -155,3 +155,7 @@ See [QC_VAT_UPDATE.md](QC_VAT_UPDATE.md) for the two incremental migrations, his
 ## Branded quotation proposal PDF
 
 See [QUOTE_PROPOSAL_UPDATE.md](QUOTE_PROPOSAL_UPDATE.md) for the supplied PostX print design, editable service overview/expiry date, and the additive migration required before frontend deployment.
+
+## Quote archiving
+
+See [QUOTE_ARCHIVING.md](QUOTE_ARCHIVING.md) for quote Archive/Restore, the incremental migration, security checks and database-before-frontend deployment order.
