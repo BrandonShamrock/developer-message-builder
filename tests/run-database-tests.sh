@@ -31,3 +31,8 @@ done
 pgtest < tests/database.test.sql
 for pass in 1 2; do pgtest < supabase/amper_besig_quote_proposal.sql; done
 pgtest < tests/quote-proposal.test.sql
+pgtest -c "create table public.test_pre_archive_quotes as select id,to_jsonb(q) as header,(select jsonb_agg(to_jsonb(i) order by position) from public.crm_quote_items i where quote_id=q.id) as items from public.crm_quotes q;"
+for pass in 1 2; do pgtest < supabase/amper_besig_quote_archiving.sql; done
+pgtest < tests/quote-archiving.test.sql
+pgtest < supabase/amper_besig_quote_archiving.sql
+pgtest -c "do \$\$ begin assert (select is_archived from public.crm_quotes where notes='Legacy issued'); end \$\$;"

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from './supabase'
 import Modal from './Modal'
 import QuoteDocument from './QuoteDocument'
@@ -12,6 +12,10 @@ export default function Quotes() {
   const [groups, setGroups] = useState([])
   const [products, setProducts] = useState([])
   const [search, setSearch] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
+  const [archiveBusy, setArchiveBusy] = useState(false)
+  const [archiveError, setArchiveError] = useState('')
+  const archivePending = useRef(false)
   const [clientSearch, setClientSearch] = useState('')
   const [productSearch, setProductSearch] = useState('')
   const [picker, setPicker] = useState(false)
@@ -39,7 +43,28 @@ export default function Quotes() {
     setDraft({ crm_client_id: '', client_snapshot: {}, discount_percentage: '0', notes: '', service_overview: DEFAULT_SERVICE_OVERVIEW, valid_until: '', status: 'draft', items: [], refresh_client: true }); setError(''); setClientSearch('')
   }
   function edit(quote) {
+    if (quote.is_archived || quote.status !== 'draft') return
     setDraft({ ...quote, service_overview: quote.service_overview || '', valid_until: quote.valid_until || '', discount_percentage: String(quote.discount_percentage), items: [...quote.crm_quote_items].sort((a,b) => a.position-b.position), refresh_client: false }); setError(''); setClientSearch('')
+  }
+  async function archiveQuote(quote) {
+    if (archivePending.current) return
+    const restoring = Boolean(quote.is_archived)
+    if (!restoring && !window.confirm(`Archive quotation ${quote.quote_number}? You can restore it later. Its saved information will not change.`)) return
+    archivePending.current = true
+    setArchiveBusy(true); setArchiveError(''); setNotice('')
+    try {
+      const { data, error } = await supabase.rpc('set_crm_quote_archived', {
+        p_quote_id: quote.id, p_is_archived: !restoring,
+      })
+      if (error) throw error
+      setQuotes(previous => previous.map(item => item.id === data.id ? { ...item, is_archived: data.is_archived } : item))
+      setNotice(restoring ? 'Quotation restored.' : 'Quotation archived. Its saved information is preserved.')
+    } catch (error) {
+      setArchiveError(`Unable to ${restoring ? 'restore' : 'archive'} quotation: ${error.message}`)
+    } finally {
+      archivePending.current = false
+      setArchiveBusy(false)
+    }
   }
   function selectClient(id) {
     const client = clients.find(c => c.id === id)
@@ -78,11 +103,13 @@ export default function Quotes() {
     if (!calculated || !draft.items.length || !draft.client_snapshot.business_name) { setError('Select a client and valid products before previewing.'); return }
     setView({ ...draft, ...calculated, quote_number: draft.quote_number || 'UNSAVED DRAFT', created_at: draft.created_at || new Date().toISOString(), crm_quote_items: calculated.lines })
   }
-  const filtered = quotes.filter(q => `${q.quote_number} ${q.client_snapshot.business_name} ${q.client_snapshot.group_name}`.toLowerCase().includes(search.toLowerCase()))
+  const filtered = quotes.filter(q => (showArchived || !q.is_archived) && `${q.quote_number} ${q.client_snapshot.business_name} ${q.client_snapshot.group_name}`.toLowerCase().includes(search.toLowerCase()))
   return <section>
-    {!draft ? <><div className="list-toolbar"><input type="search" aria-label="Search quotations" placeholder="Search quote number, business or group" value={search} onChange={e => setSearch(e.target.value)} /><button onClick={create} disabled={loading}>Create Quote</button></div>
+    {!draft ? <><div className="list-toolbar"><input type="search" aria-label="Search quotations" placeholder="Search quote number, business or group" value={search} onChange={e => setSearch(e.target.value)} /><button onClick={create} disabled={loading || archiveBusy}>Create Quote</button></div>
+      <label className="inline-check"><input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} />Show archived quotes</label>
       {notice && <p role="status">{notice}</p>}
-      {loading ? <p>Loading quotations…</p> : <div className="crm-grid">{filtered.map(q => <article className="crm-card" key={q.id}><h2>{q.quote_number}</h2><strong>{q.client_snapshot.business_name}</strong><p>{q.client_snapshot.group_name || 'No group'} · {new Date(q.created_at).toLocaleDateString('en-ZA')} · {q.status}</p><dl><dt>Total Setup Cost</dt><dd>{money(finalTotal(q, 'setup'))}</dd><dt>Total Monthly Cost</dt><dd>{money(finalTotal(q, 'monthly'))}</dd></dl><div className="actions"><button onClick={() => setView(q)}>View</button><button className="secondary" disabled={q.status !== 'draft'} onClick={() => edit(q)}>Edit</button></div></article>)}{!filtered.length && <p className="empty-state">No quotations match your search.</p>}</div>}</> : <form className="form-card quote-builder" onSubmit={save}>
+      {archiveError && <p className="error" role="alert">{archiveError}</p>}
+      {loading ? <p>Loading quotations…</p> : <div className="crm-grid">{filtered.map(q => <article className="crm-card" key={q.id}><h2>{q.quote_number}</h2>{q.is_archived && <span>Archived</span>}<strong>{q.client_snapshot.business_name}</strong><p>{q.client_snapshot.group_name || 'No group'} · {new Date(q.created_at).toLocaleDateString('en-ZA')} · {q.status}</p><dl><dt>Total Setup Cost</dt><dd>{money(finalTotal(q, 'setup'))}</dd><dt>Total Monthly Cost</dt><dd>{money(finalTotal(q, 'monthly'))}</dd></dl><div className="actions"><button onClick={() => setView(q)}>View</button><button className="secondary" disabled={archiveBusy || q.is_archived || q.status !== 'draft'} title={q.is_archived ? 'Restore this quotation before editing.' : undefined} onClick={() => edit(q)}>Edit</button><button className="secondary" disabled={archiveBusy} onClick={() => archiveQuote(q)}>{q.is_archived ? 'Restore' : 'Archive'}</button></div></article>)}{!filtered.length && <p className="empty-state">No quotations match your search.</p>}</div>}</> : <form className="form-card quote-builder" onSubmit={save}>
       <h2>{draft.id ? `Edit ${draft.quote_number}` : 'Create Quote'}</h2>
       <button type="button" className="secondary" disabled={busy} onClick={load}>Refresh client and product data</button>
       {notice.startsWith('Unable') && <p className="error" role="alert">{notice}</p>}
