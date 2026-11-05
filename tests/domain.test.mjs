@@ -88,3 +88,11 @@ test('legacy seventeen outcomes require LiveChat only after reopening',()=>{
   assert.equal(needsQc('Onboarding','completed',qc,{category:'Onboarding',status:'wip'}),true)
   for(const outcome of ['completed','not_acquired']) assert.equal(needsQc('Onboarding','completed',{...qc,LiveChat:outcome}),false)
 })
+
+test('proposal dates preserve date-only expiry, Johannesburg quote dates and blanks',async()=>{
+  const { quoteDate, DEFAULT_SERVICE_OVERVIEW }=await import('../src/quoteProposal.js')
+  assert.equal(quoteDate('2026-12-15'),'2026/12/15')
+  assert.equal(quoteDate('2026-12-14T23:30:00Z'),'2026/12/15')
+  assert.equal(quoteDate(null),'');assert.equal(quoteDate('not-a-date'),'')
+  assert.ok(DEFAULT_SERVICE_OVERVIEW.startsWith('PostX is a customer communication'))
+})

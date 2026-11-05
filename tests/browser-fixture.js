@@ -53,7 +53,7 @@ export const supabase={from:query,auth:{
         db.daily_task_onboarding_qc.push({task_id:task.id,setup_type,outcome})
       }persist();return {data:task,error:null}
     }
-    if(name==='save_crm_quote'){
+    if(name==='save_crm_quote_proposal'){
       const previous=db.crm_quotes.find(q=>q.id===p.p_quote_id)
       const c=db.crm_clients.find(c=>c.id===p.p_client_id)
       const items=p.p_items.map((i,index)=>{
@@ -62,7 +62,7 @@ export const supabase={from:query,auth:{
         return {...old,id:crypto.randomUUID(),product_id:i.product_id,product_name:old?.product_name||product.name,product_description:old?.product_description||product.description,setup_unit_cost:old?.setup_unit_cost||product.setup_cost,monthly_unit_cost:old?.monthly_unit_cost||product.monthly_cost,quantity:i.quantity,position:index}
       })
       const totals=quoteTotals(items,p.p_expected_discount)
-      const quote={id:previous?.id||crypto.randomUUID(),quote_number:previous?.quote_number||'AB-2026-000001',created_at:previous?.created_at||new Date().toISOString(),crm_client_id:p.p_client_id,client_snapshot:previous&&!p.p_refresh_client?previous.client_snapshot:{...c,group_name:'Team Group'},discount_percentage:p.p_expected_discount,...totals,crm_quote_items:totals.lines,notes:p.p_notes,status:p.p_status}
+      const quote={id:previous?.id||crypto.randomUUID(),quote_number:previous?.quote_number||'AB-2026-000001',created_at:previous?.created_at||new Date().toISOString(),crm_client_id:p.p_client_id,client_snapshot:previous&&!p.p_refresh_client?previous.client_snapshot:{...c,group_name:'Team Group'},discount_percentage:p.p_expected_discount,...totals,crm_quote_items:totals.lines,notes:p.p_notes,status:p.p_status,service_overview:p.p_service_overview?.trim()||null,valid_until:p.p_valid_until||null}
       db.crm_quotes=db.crm_quotes.filter(q=>q.id!==quote.id).concat(quote);persist();return {data:quote,error:null}
     }
     return {data:null,error:null}

@@ -29,3 +29,5 @@ for pass in 1 2; do
   for file in supabase/amper_besig_qc_livechat.sql supabase/amper_besig_quote_vat.sql; do pgtest < "$file"; done
 done
 pgtest < tests/database.test.sql
+for pass in 1 2; do pgtest < supabase/amper_besig_quote_proposal.sql; done
+pgtest < tests/quote-proposal.test.sql
