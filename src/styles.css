@@ -243,3 +243,16 @@ table input[type="number"] { min-width:7rem; }
   .quote-document th, .quote-document td { padding:.5rem .4rem; }
   .quote-document .quote-totals { gap:.35rem; margin:.65rem 0; }
 }
+
+/* One final summary after the notes; it stays in normal document flow. */
+.quote-final-totals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; border:2px solid var(--brand); border-radius:10px; padding:1rem; margin-top:1rem; break-inside:avoid; page-break-inside:avoid; }
+.quote-final-totals > div { min-width:0; display:grid; grid-template-rows:auto auto 1fr; align-content:start; }
+.quote-final-totals h2 { font-size:1.1rem; margin:0; }
+.quote-final-totals p { margin:.35rem 0; font-size:.85rem; }
+.quote-final-totals strong { font-size:1.5rem; overflow-wrap:anywhere; align-self:end; font-variant-numeric:tabular-nums; }
+@media (max-width:620px) { .quote-final-totals { grid-template-columns:1fr; } }
+@media print {
+  .quote-document .quote-final-totals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); break-inside:avoid; page-break-inside:avoid; border-color:#172033; }
+  .quote-document table { table-layout:fixed; overflow-wrap:anywhere; }
+  .quote-document .quote-notes { overflow-wrap:anywhere; }
+}

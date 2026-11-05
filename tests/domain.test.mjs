@@ -1,16 +1,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { quoteTotals, money, clientSnapshot, validatePrice, normaliseDiscount } from '../src/money.js'
+import { VAT_RATE, quoteTotals, money, clientSnapshot, validatePrice, normaliseDiscount } from '../src/money.js'
 import { CATEGORIES, SETUP_TYPES, qcProgress, needsQc } from '../src/qc.js'
 const line = (setup,monthly,quantity='1') => ({setup_unit_cost:setup,monthly_unit_cost:monthly,quantity})
-test('all eight categories and all 17 setup types are preserved', () => {
-  assert.equal(CATEGORIES.length,8); assert.equal(new Set(SETUP_TYPES).size,17)
+test('all eight categories and all 18 setup types are preserved', () => {
+  assert.equal(CATEGORIES.length,8); assert.equal(new Set(SETUP_TYPES).size,18)
+  assert.equal(SETUP_TYPES.filter(x=>x==='Routing').length,1)
+  assert.equal(SETUP_TYPES[8],'LiveChat')
   assert.equal(SETUP_TYPES[0],'PostX Organisation'); assert.equal(SETUP_TYPES.at(-1),'Training')
 })
 test('QC accepts either outcome, partial saves, legacy completed edits and reopens', () => {
-  assert.equal(qcProgress().outstanding,17)
+  assert.equal(qcProgress().outstanding,18)
   const qc=Object.fromEntries(SETUP_TYPES.map((key,i)=>[key,i%2?'not_acquired':'completed']))
-  assert.deepEqual(qcProgress(qc),{completed:9,notAcquired:8,reviewed:17,outstanding:0})
+  assert.deepEqual(qcProgress(qc),{completed:9,notAcquired:9,reviewed:18,outstanding:0})
   assert.equal(needsQc('Onboarding','completed',qc),false)
   delete qc.Training
   assert.equal(needsQc('Onboarding','completed',qc),true)
@@ -51,4 +53,38 @@ test('group relationship is authoritative, with legacy client fallback and immut
   groups[0].discount_percentage='20';assert.equal(snapshot.discount_percentage,'12.3457')
   assert.equal(clientSnapshot({...client,group_id:null},groups).discount_percentage,'5.0000')
   assert.equal(normaliseDiscount('0'),'0.0000')
+})
+
+test('VAT is rounded after discount and keeps exclusive totals unchanged',()=>{
+  const result=quoteTotals([line('1500','750')],'10')
+  assert.equal(result.vat_rate,VAT_RATE)
+  assert.equal(result.setup_total,'1350.00'); assert.equal(result.setup_vat,'202.50'); assert.equal(result.setup_total_including_vat,'1552.50')
+  assert.equal(result.monthly_total,'675.00'); assert.equal(result.monthly_vat,'101.25'); assert.equal(result.monthly_total_including_vat,'776.25')
+  const fractional=quoteTotals([line('0.10','0.05','1.5')],'10')
+  assert.equal(fractional.setup_total,'0.13'); assert.equal(fractional.setup_vat,'0.02'); assert.equal(fractional.setup_total_including_vat,'0.15')
+  assert.equal(fractional.monthly_total,'0.07'); assert.equal(fractional.monthly_vat,'0.01'); assert.equal(fractional.monthly_total_including_vat,'0.08')
+  // Discount-first rounding differs from applying VAT to the original subtotal.
+  const cents=quoteTotals([line('0.04','0.04')],'50')
+  assert.equal(cents.setup_vat,'0.00'); assert.equal(cents.setup_total_including_vat,'0.02')
+})
+test('VAT handles full/zero discounts, empty sections, and future rates',()=>{
+  const zero=quoteTotals([line('1500','750')],'0')
+  assert.equal(zero.setup_total_including_vat,'1725.00'); assert.equal(zero.monthly_total_including_vat,'862.50')
+  for(const result of [quoteTotals([line('1500','750')],'100'),quoteTotals([line('0','0')],'0'),quoteTotals([],'0')]) {
+    for(const kind of ['setup','monthly']) {
+      assert.equal(result[`${kind}_vat`],'0.00'); assert.equal(result[`${kind}_total_including_vat`],'0.00')
+    }
+  }
+  const old=quoteTotals([line('100','0')],'0','14')
+  assert.equal(old.vat_rate,'14.0000'); assert.equal(old.setup_total_including_vat,'114.00')
+  assert.equal(quoteTotals([line('100','0')],'0').setup_total_including_vat,'115.00')
+  assert.equal(old.setup_total_including_vat,'114.00')
+  for(const rate of ['-1','101','NaN','15.00001']) assert.throws(()=>quoteTotals([line('1','1')],'0',rate))
+})
+test('legacy seventeen outcomes require LiveChat only after reopening',()=>{
+  const qc=Object.fromEntries(SETUP_TYPES.filter(x=>x!=='LiveChat').map(x=>[x,'completed']))
+  assert.deepEqual(qcProgress(qc),{completed:17,notAcquired:0,reviewed:17,outstanding:1})
+  assert.equal(needsQc('Onboarding','completed',qc,{category:'Onboarding',status:'completed'}),false)
+  assert.equal(needsQc('Onboarding','completed',qc,{category:'Onboarding',status:'wip'}),true)
+  for(const outcome of ['completed','not_acquired']) assert.equal(needsQc('Onboarding','completed',{...qc,LiveChat:outcome}),false)
 })

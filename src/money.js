@@ -1,3 +1,6 @@
+// Current rate for new saves. Keep the server's crm_quote_vat_rate() in sync.
+export const VAT_RATE = '15.0000'
+
 // Decimal strings -> scaled integers. All financial arithmetic uses BigInt.
 export function scaled(value, digits = 2) {
   const text = String(value ?? '').trim()
@@ -20,7 +23,9 @@ export function validatePrice(value) {
   if (cents > 99999999999n) throw new Error('Price must be at most R999,999,999.99.')
   return decimal(cents)
 }
-export function quoteTotals(items, discount) {
+export function quoteTotals(items, discount, vatRate = VAT_RATE) {
+  const vatPercentage = scaled(vatRate, 4)
+  if (vatPercentage > 1000000n) throw new Error('VAT rate must be between 0 and 100%.')
   const percentage = scaled(discount, 4)
   if (percentage > 1000000n) throw new Error('Discount must be between 0 and 100%.')
   const lines = items.map(item => {
@@ -37,9 +42,13 @@ export function quoteTotals(items, discount) {
     if (subtotal > 9999999999999n) throw new Error('Quotation exceeds the supported total.')
     totals[`${kind}_subtotal`] = decimal(subtotal)
     totals[`${kind}_discount`] = decimal(reduction)
-    totals[`${kind}_total`] = decimal(subtotal - reduction)
+    const afterDiscount = subtotal - reduction
+    const vat = round(afterDiscount * vatPercentage, 1000000n)
+    totals[`${kind}_total`] = decimal(afterDiscount)
+    totals[`${kind}_vat`] = decimal(vat)
+    totals[`${kind}_total_including_vat`] = decimal(afterDiscount + vat)
   }
-  return { lines, ...totals }
+  return { lines, vat_rate: decimal(vatPercentage, 4), ...totals }
 }
 export function normaliseDiscount(value) {
   const text = String(value)

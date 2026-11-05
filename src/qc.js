@@ -1,5 +1,5 @@
 export const CATEGORIES = ['Onboarding', 'Support', 'Fix', 'Update', 'Assistance', 'Internal', 'Meeting', 'Other']
-export const SETUP_TYPES = ['PostX Organisation', 'Subgroups', 'Members', 'SLA', 'Quick Replies', 'Open Hours', 'WABAs', 'Routing', 'Automated Replies', 'Integration', 'Conexa', 'AI', 'Social Media Synced', 'Post Types', 'Review Boosted', 'Tested', 'Training']
+export const SETUP_TYPES = ['PostX Organisation', 'Subgroups', 'Members', 'SLA', 'Quick Replies', 'Open Hours', 'WABAs', 'Routing', 'LiveChat', 'Automated Replies', 'Integration', 'Conexa', 'AI', 'Social Media Synced', 'Post Types', 'Review Boosted', 'Tested', 'Training']
 export const QC_MESSAGE = 'Please complete the Onboarding QC checklist before marking this task as Completed.'
 export function qcProgress(qc = {}) {
   const completed = SETUP_TYPES.filter(key => qc[key] === 'completed').length
