@@ -124,10 +124,19 @@ with sync_playwright() as p:
     page.get_by_label('Quantity for PostX AI, line 1',exact=True).fill('2')
     expect(page.get_by_text('R2,700.00',exact=True)).to_be_visible()
     expect(page.get_by_text('R1,350.00',exact=True)).to_be_visible()
+    page.get_by_label('Service overview',exact=True).fill('Custom PostX service overview for Alpha Dealer.\nIncludes setup and ongoing support. <script>window.__proposalInjected=true</script>')
+    page.get_by_label('Expiry date',exact=True).fill('2026-12-15')
     page.get_by_label('Notes',exact=True).fill('Quotation notes')
-    page.evaluate("window.__fail='save_crm_quote'")
+    page.get_by_role('button',name='Preview Quote',exact=True).click()
+    expect(dialog.locator('.meta')).to_contain_text('2026/12/15')
+    expect(dialog.get_by_role('region',name='Overview of service')).to_contain_text('Custom PostX service overview for Alpha Dealer.')
+    assert page.evaluate('window.__proposalInjected') is None
+    dialog.get_by_role('button',name='Close Preview',exact=True).click()
+    page.evaluate("window.__fail='save_crm_quote_proposal'")
     page.get_by_role('button',name='Save Quote',exact=True).click()
     expect(page.get_by_role('alert')).to_contain_text('Simulated RPC failure')
+    expect(page.get_by_label('Expiry date',exact=True)).to_have_value('2026-12-15')
+    expect(page.get_by_label('Service overview',exact=True)).to_have_value(re.compile('Custom PostX'))
     page.evaluate('window.__fail=null')
     page.get_by_role('button',name='Save Quote',exact=True).click()
     expect(dialog.get_by_text('AB-2026-000001',exact=True)).to_be_visible()
@@ -135,6 +144,18 @@ with sync_playwright() as p:
     expect(dialog.locator('.quote-final-totals strong')).to_have_text(['R3,105.00','R1,552.50'])
     assert page.evaluate('window.__db.crm_quotes[0].vat_rate')=='15.0000'
     assert page.evaluate('window.__db.crm_quotes[0].setup_vat')=='405.00'
+    expect(dialog.locator('.proposal-text').filter(has_text='Custom PostX service overview')).to_have_count(1)
+    expect(dialog.locator('.meta')).to_contain_text('2026/12/15')
+    expect(dialog.get_by_text('PostX features',exact=True)).to_have_count(0)
+    expect(dialog.locator('#quote-print')).not_to_contain_text('{{')
+    assert page.evaluate('window.__proposalInjected') is None
+    assert page.evaluate('window.__db.crm_quotes[0].valid_until')=='2026-12-15'
+    assert page.evaluate('window.__db.crm_quotes[0].service_overview').startswith('Custom PostX')
+    page.reload()
+    nav.get_by_role('button',name='Quotes',exact=True).click()
+    page.get_by_role('button',name='View',exact=True).click()
+    expect(dialog.locator('.meta')).to_contain_text('2026/12/15')
+    assert dialog.locator('#quote-print img').evaluate_all('(images)=>images.every(i=>i.complete&&i.naturalWidth>0)')
     page.emulate_media(media='print')
     assert page.locator('.sidebar').evaluate('(e)=>getComputedStyle(e).display')=='none'
     page.pdf(path='/tmp/amper-besig-quote-test.pdf',format='A4')
@@ -144,13 +165,15 @@ with sync_playwright() as p:
     page.get_by_role('button',name='Edit',exact=True).click()
     expect(page.get_by_text('R2,700.00',exact=True)).to_be_visible()
     expect(page.get_by_text('Group Discount: 10.0000%',exact=True)).to_be_visible()
+    expect(page.get_by_label('Service overview',exact=True)).to_have_value(re.compile('Custom PostX'))
+    expect(page.get_by_label('Expiry date',exact=True)).to_have_value('2026-12-15')
     page.get_by_role('button',name='Cancel',exact=True).click()
     print('PASS quotes CRM/discount/quantity/atomic-error UX/save/view/snapshot/edit/print')
     # Historical issued/draft records are never recalculated just by viewing them.
     page.evaluate("""() => {
       const source=window.__db.crm_quotes[0];
       for (const status of ['issued','draft']) {
-        const q=structuredClone(source); q.id='legacy-'+status; q.quote_number='LEGACY-'+status; q.status=status;
+        const q=structuredClone(source); q.id='legacy-'+status; q.quote_number='LEGACY-'+status; q.status=status;q.service_overview=null;q.valid_until=null;
         for(const key of ['vat_rate','setup_vat','monthly_vat','setup_total_including_vat','monthly_total_including_vat']) q[key]=null;
         window.__db.crm_quotes.push(q);
       }
@@ -167,6 +190,8 @@ with sync_playwright() as p:
     expect(dialog.locator('.vat-note')).to_contain_text('VAT was not calculated')
     expect(dialog.locator('.quote-final-totals strong')).to_have_text(['R2,700.00','R1,350.00'])
     expect(dialog.get_by_text('VAT (15%)',exact=True)).to_have_count(0)
+    expect(dialog.locator('.meta')).not_to_contain_text('Valid until')
+    expect(dialog.get_by_role('region',name='Overview of service')).not_to_contain_text('Custom PostX')
     dialog.get_by_role('button',name='Close Preview',exact=True).click()
     prior=page.locator('.crm-card').filter(has=page.get_by_role('heading',name='PRIOR-RATE',exact=True))
     prior.get_by_role('button',name='View',exact=True).click()
@@ -236,10 +261,14 @@ with sync_playwright() as p:
     dialog.get_by_label(re.compile('Updated Free Service')).check()
     dialog.get_by_role('button',name='Add Selected Products',exact=True).click()
     for kind in ['setup','monthly']: expect(page.get_by_text(f'No chargeable {kind} items.',exact=True)).to_be_visible()
+    page.get_by_label('Service overview',exact=True).fill('')
+    page.get_by_label('Expiry date',exact=True).fill('')
     expect(page.locator('.quote-builder .quote-final-totals strong')).to_have_text(['R0.00','R0.00'])
     page.get_by_role('button',name='Preview Quote',exact=True).click()
     for kind in ['setup','monthly']: expect(dialog.get_by_text(f'No chargeable {kind} items.',exact=True)).to_be_visible()
-    expect(dialog.locator('tbody tr')).to_have_count(0)
+    expect(dialog.locator('.quote-costs tbody tr')).to_have_count(0)
+    expect(dialog.locator('.meta')).not_to_contain_text('Valid until')
+    expect(dialog.locator('#quote-print')).not_to_contain_text('{{')
     dialog.get_by_role('button',name='Close Preview',exact=True).click()
     page.get_by_role('button',name='Cancel',exact=True).click()
     # A long quotation must paginate naturally, with the final summary together on its final page.
@@ -263,10 +292,19 @@ with sync_playwright() as p:
     assert len(pdf)>2
     combined=''.join(p.get_text() for p in pdf)
     assert combined.count('Total Setup Cost')==1 and combined.count('Total Monthly Cost')==1
-    last=pdf[-1]
+    summary_pages=[i for i,p in enumerate(pdf) if p.search_for('Total Setup Cost')]
+    assert len(summary_pages)==1
+    last=pdf[summary_pages[0]]
     left=last.search_for('Total Setup Cost');right=last.search_for('Total Monthly Cost')
     assert len(left)==len(right)==1 and abs(left[0].y0-right[0].y0)<1
-    assert 'Long product 70' in combined and 'End of long quotation' in last.get_text()
+    assert 'Long product 70' in combined and 'End of long quotation' in combined
+    assert 'Company overview' in combined or 'COMPANY OVERVIEW' in combined
+    assert 'ORDER CONFIRMATION' in combined
+    assert '{{' not in combined
+    assert pdf[0].search_for('PostX Proposal & Quotation')
+    assert len(pdf[0].get_images())==4
+    assert 'ORDER CONFIRMATION' in pdf[-1].get_text()
+    assert 'postx@r-e-d.online' in pdf[-1].get_text()
     assert 'Save Quote' not in combined and 'Print / Save as PDF' not in combined
     for rect in last.search_for('Total Setup Cost')+last.search_for('Total Monthly Cost'):
         assert rect.x0>=40 and rect.x1<=last.rect.width-40 and rect.y1<=last.rect.height-40
@@ -274,7 +312,32 @@ with sync_playwright() as p:
     page.emulate_media(media='screen')
     page.set_viewport_size({'width':1440,'height':1000})
     dialog.get_by_role('button',name='Close Preview',exact=True).click()
-    print('PASS zero sections and multi-page A4 PDF with both totals together on final page')
+    print('PASS zero sections and multi-page A4 PDF with both totals together in branded proposal')
+    # Optional missing data prints blank, with no tokens, dash fallbacks or punctuation.
+    page.evaluate("""() => {
+      const q=structuredClone(window.__db.crm_quotes[0]); q.id='sparse';q.quote_number='SPARSE';q.status='issued';
+      q.client_snapshot={business_name:'Sparse Dealer'};q.service_overview=null;q.valid_until=null;q.notes=null;
+      window.__db.crm_quotes.push(q);localStorage.setItem('amper-test-db',JSON.stringify(window.__db));
+    }""")
+    nav.get_by_role('button',name='Dashboard',exact=True).click()
+    nav.get_by_role('button',name='Quotes',exact=True).click()
+    page.locator('.crm-card').filter(has=page.get_by_role('heading',name='SPARSE',exact=True)).get_by_role('button',name='View',exact=True).click()
+    expect(dialog.locator('.oc tr').filter(has=page.get_by_role('rowheader',name='Contact',exact=True)).locator('td')).to_be_empty()
+    expect(dialog.locator('.oc tr').filter(has=page.get_by_role('rowheader',name='Address',exact=True)).locator('td')).to_be_empty()
+    expect(dialog.locator('.oc tr').filter(has=page.get_by_role('rowheader',name='Group',exact=True)).locator('td')).to_be_empty()
+    expect(dialog.locator('.meta')).not_to_contain_text('Valid until')
+    expect(dialog.locator('.proposal-notes')).to_have_count(0)
+    expect(dialog.get_by_role('region',name='Overview of service').locator('.proposal-text')).to_have_count(0)
+    expect(dialog.locator('#quote-print')).not_to_contain_text('{{')
+    page.emulate_media(media='print')
+    # PDF colours remain independent of the app's dark appearance setting.
+    page.locator('html').evaluate("e=>e.setAttribute('data-mode','dark')")
+    assert dialog.locator('#quote-print').evaluate('(e)=>getComputedStyle(e).backgroundColor')=='rgb(255, 255, 255)'
+    assert dialog.locator('.ftr > div').first.evaluate('(e)=>getComputedStyle(e).color')=='rgb(203, 210, 222)'
+    page.locator('html').evaluate("e=>e.setAttribute('data-mode','light')")
+    page.emulate_media(media='screen')
+    dialog.get_by_role('button',name='Close Preview',exact=True).click()
+    print('PASS blank optional fields, plain-text overview and theme-independent branded print')
     # Existing modules still mount and keep their controls.
     for name,control in [('Templates','Create Template'),('Clients','Create Client'),('CRM','Create Client')]:
         nav.get_by_role('button',name=name,exact=True).click()

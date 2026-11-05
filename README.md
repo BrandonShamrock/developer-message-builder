@@ -151,3 +151,7 @@ See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the four new SQL migrations, exac
 ## LiveChat QC and quotation VAT update
 
 See [QC_VAT_UPDATE.md](QC_VAT_UPDATE.md) for the two incremental migrations, historical-quote rules, coordinated deployment order and validation. Existing deployments must use these incremental migrations instead of rerunning the original production SQL.
+
+## Branded quotation proposal PDF
+
+See [QUOTE_PROPOSAL_UPDATE.md](QUOTE_PROPOSAL_UPDATE.md) for the supplied PostX print design, editable service overview/expiry date, and the additive migration required before frontend deployment.

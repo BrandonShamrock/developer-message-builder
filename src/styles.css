@@ -219,7 +219,7 @@ table input[type="number"] { min-width:7rem; }
 @media (max-width:1100px) { .quote-costs { grid-template-columns:1fr; } }
 @media (max-width:620px) { .crm-grid { grid-template-columns:1fr; } .app-dialog { padding:1rem; } .client-details { grid-template-columns:1fr; } }
 @media print {
-  body:has(#quote-print), body:has(#quote-print) * { color:#172033; color-scheme:light; }
+  body:has(#quote-print) { color:#172033; color-scheme:light; }
   body:has(#quote-print) { background:white; font-size:11pt; }
   body:has(#quote-print) .sidebar, body:has(#quote-print) main > header, body:has(#quote-print) main > section > :not(dialog), .no-print, .app-dialog:has(#quote-print) .dialog-heading { display:none !important; }
   body:has(#quote-print) .app-shell { display:block; min-height:0; }

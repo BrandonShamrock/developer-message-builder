@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import { supabase } from './supabase'
 import Modal from './Modal'
-import { clientSnapshot, money, quoteTotals, scaled } from './money'
+import QuoteDocument from './QuoteDocument'
+import { CostBreakdowns, FinalTotals, VatNote, finalTotal } from './QuoteCosts'
+import { DEFAULT_SERVICE_OVERVIEW } from './quoteProposal'
+import { clientSnapshot, money, quoteTotals } from './money'
 
 export default function Quotes() {
   const [quotes, setQuotes] = useState([])
@@ -33,10 +36,10 @@ export default function Quotes() {
   }
   useEffect(() => { load() }, [])
   function create() {
-    setDraft({ crm_client_id: '', client_snapshot: {}, discount_percentage: '0', notes: '', status: 'draft', items: [], refresh_client: true }); setError(''); setClientSearch('')
+    setDraft({ crm_client_id: '', client_snapshot: {}, discount_percentage: '0', notes: '', service_overview: DEFAULT_SERVICE_OVERVIEW, valid_until: '', status: 'draft', items: [], refresh_client: true }); setError(''); setClientSearch('')
   }
   function edit(quote) {
-    setDraft({ ...quote, discount_percentage: String(quote.discount_percentage), items: [...quote.crm_quote_items].sort((a,b) => a.position-b.position), refresh_client: false }); setError(''); setClientSearch('')
+    setDraft({ ...quote, service_overview: quote.service_overview || '', valid_until: quote.valid_until || '', discount_percentage: String(quote.discount_percentage), items: [...quote.crm_quote_items].sort((a,b) => a.position-b.position), refresh_client: false }); setError(''); setClientSearch('')
   }
   function selectClient(id) {
     const client = clients.find(c => c.id === id)
@@ -59,11 +62,12 @@ export default function Quotes() {
     if (calculationError) { setError(calculationError); return }
     setBusy(true)
     try {
-      const { data, error } = await supabase.rpc('save_crm_quote', {
+      const { data, error } = await supabase.rpc('save_crm_quote_proposal', {
         p_quote_id: draft.id || null, p_client_id: draft.crm_client_id || null,
         p_items: draft.items.map(item => ({ id: item.id || null, product_id: item.product_id, quantity: String(item.quantity), setup_unit_cost: String(item.setup_unit_cost), monthly_unit_cost: String(item.monthly_unit_cost) })),
         p_notes: draft.notes, p_refresh_client: draft.refresh_client, p_status: draft.status,
         p_expected_discount: draft.discount_percentage,
+        p_service_overview: draft.service_overview, p_valid_until: draft.valid_until || null,
       })
       if (error) throw error
       setDraft(null); setView(data); setNotice(`Quotation ${data.quote_number} saved.`); await load()
@@ -92,6 +96,9 @@ export default function Quotes() {
       <div className="table-scroll"><table><caption>Selected products</caption><thead><tr><th>Product</th><th>Quantity</th><th>Setup Cost</th><th>Monthly Cost</th><th>Actions</th></tr></thead><tbody>{draft.items.map((item,index) => <tr key={item.id || `${item.product_id}-${index}`}><th scope="row">{item.product_name}<small>{item.product_description}</small></th><td><input aria-label={`Quantity for ${item.product_name}, line ${index+1}`} type="number" min="0.001" max="999999.999" step="0.001" required value={item.quantity} onChange={e => setDraft({ ...draft, items: draft.items.map((line,i) => i === index ? { ...line, quantity: e.target.value } : line) })} /></td><td>{money(item.setup_unit_cost)}</td><td>{money(item.monthly_unit_cost)}</td><td><button type="button" className="secondary" aria-label={`Remove ${item.product_name}, line ${index+1}`} onClick={() => setDraft({ ...draft, items: draft.items.filter((_,i) => i !== index) })}>Remove</button></td></tr>)}</tbody></table></div>
       {calculationError && <p className="error" role="alert">{calculationError}</p>}
       {calculated && <CostBreakdowns quote={{ ...draft, ...calculated, crm_quote_items: calculated.lines }} />}
+      <label>Service overview<textarea aria-label="Service overview" rows="5" value={draft.service_overview} onChange={e => setDraft({ ...draft, service_overview: e.target.value })} placeholder="Describe the services included in this proposal" /></label>
+      <label>Expiry date<input type="date" value={draft.valid_until} onChange={e => setDraft({ ...draft, valid_until: e.target.value })} /></label>
+      <p className="hint">Service overview and expiry date are optional and saved with this quotation. Leave them blank to omit their content from the PDF.</p>
       <label>Notes<textarea rows="3" value={draft.notes} onChange={e => setDraft({ ...draft, notes: e.target.value })} /></label>
       <label>Quote status<select aria-label="Quote status" value={draft.status} onChange={e => setDraft({ ...draft, status: e.target.value })}><option value="draft">Draft — editable</option><option value="issued">Issued — locked after saving</option></select></label>
       {calculated && <><VatNote quote={calculated} /><FinalTotals quote={calculated} /></>}
@@ -99,24 +106,13 @@ export default function Quotes() {
       <div className="actions"><button disabled={busy}>{busy ? 'Saving…' : 'Save Quote'}</button><button type="button" disabled={busy} className="secondary" onClick={preview}>Preview Quote</button><button type="button" disabled={busy} className="secondary" onClick={() => setDraft(null)}>Cancel</button></div>
     </form>}
     {picker && <Modal title="Select Products" onClose={() => setPicker(false)}><label>Search products<input type="search" value={productSearch} onChange={e => setProductSearch(e.target.value)} /></label><div className="product-options">{products.filter(p => `${p.name} ${p.description}`.toLowerCase().includes(productSearch.toLowerCase())).map(p => <label className="inline-check" key={p.id}><input type="checkbox" checked={selectedProducts.includes(p.id)} onChange={e => setSelectedProducts(e.target.checked ? [...selectedProducts,p.id] : selectedProducts.filter(id => id !== p.id))} /><span>{p.name} — setup {money(p.setup_cost)}, monthly {money(p.monthly_cost)}</span></label>)}</div>{!products.length && <p>No active products. Create products in the Products catalogue first.</p>}<button disabled={!selectedProducts.length} onClick={addProducts}>Add Selected Products</button></Modal>}
-    {view && <Modal title="Preview Quote" onClose={() => setView(null)} wide><div className="quote-document" id="quote-print"><h1>Amper Besig — PostX Quotation</h1><p><strong>{view.quote_number}</strong> · {new Date(view.created_at).toLocaleDateString('en-ZA')} · {view.status}</p><h2>Client Details</h2><ClientDetails snapshot={view.client_snapshot} /><CostBreakdowns quote={view} /><h2>Notes</h2><p className="quote-notes">{view.notes || '—'}</p><VatNote quote={view} /><FinalTotals quote={view} /></div><div className="actions no-print"><button onClick={() => window.print()}>Print / Save as PDF</button><button className="secondary" onClick={() => setView(null)}>Close Preview</button></div></Modal>}
+    {view && <Modal title="Preview Quote" onClose={() => setView(null)} wide><QuoteDocument quote={view} /><div className="actions no-print"><button onClick={async () => {
+      await Promise.all(Array.from(document.querySelectorAll('#quote-print img'), image => image.decode().catch(() => {})))
+      await document.fonts.ready
+      window.print()
+    }}>Print / Save as PDF</button><button className="secondary" onClick={() => setView(null)}>Close Preview</button></div></Modal>}
   </section>
 }
 function ClientDetails({ snapshot }) {
   return <dl className="client-details">{[['business_name','Business Name / Dealer Name'],['group_name','Group'],['business_address','Address'],['contact_name','Contact Name'],['contact_email','Contact Email']].map(([key,label]) => <div key={key}><dt>{label}</dt><dd>{snapshot[key] || '—'}</dd></div>)}</dl>
-}
-// Saved previews use persisted financial fields; null VAT identifies historical quotes.
-function hasVat(quote) { return quote.vat_rate != null }
-function finalTotal(quote, kind) { return quote[`${kind}_${hasVat(quote) ? 'total_including_vat' : 'total'}`] }
-function VatNote({ quote }) {
-  return <p className="vat-note">{hasVat(quote) ? 'VAT is included in the final totals, after group discount.' : 'Historical quotation: VAT was not calculated in this version. Original totals are preserved.'}</p>
-}
-function FinalTotals({ quote }) {
-  return <section className="quote-final-totals" aria-label="Final quotation totals">{[['setup','Total Setup Cost'],['monthly','Total Monthly Cost']].map(([kind,label]) => <div key={kind}><h2>{label}</h2><p>{hasVat(quote) ? 'Including VAT' : 'Historical total — VAT not calculated'}</p><strong>{money(finalTotal(quote, kind))}</strong></div>)}</section>
-}
-function CostBreakdowns({ quote }) {
-  return <div className="quote-costs">{[['setup','Setup Costs'],['monthly','Monthly Costs']].map(([kind,label]) => {
-    const items = quote.crm_quote_items.filter(item => scaled(item[`${kind}_unit_cost`]) > 0n)
-    return <section key={kind} aria-label={label}><h2>{label}</h2>{items.length ? <div className="table-scroll"><table><thead><tr><th>Product</th><th>Quantity</th><th>Unit {kind === 'setup' ? 'Setup' : 'Monthly'} Cost</th><th>Line Total</th></tr></thead><tbody>{items.map((item,index) => <tr key={item.id || index}><td>{item.product_name}<small>{item.product_description}</small></td><td>{item.quantity}</td><td>{money(item[`${kind}_unit_cost`])}</td><td>{money(item[`${kind}_line_total`])}</td></tr>)}</tbody></table></div> : <p className="empty-state">No chargeable {kind} items.</p>}<dl className="quote-totals"><div><dt>{kind === 'setup' ? 'Setup' : 'Monthly'} Subtotal</dt><dd>{money(quote[`${kind}_subtotal`])}</dd></div><div><dt>Group Discount</dt><dd>{quote.discount_percentage}%</dd></div><div><dt>Discount Amount</dt><dd>{money(quote[`${kind}_discount`])}</dd></div><div><dt>Subtotal After Discount</dt><dd>{money(quote[`${kind}_total`])}</dd></div>{hasVat(quote) && <><div><dt>VAT ({Number(quote.vat_rate)}%)</dt><dd>{money(quote[`${kind}_vat`])}</dd></div><div><dt>Total Including VAT</dt><dd>{money(finalTotal(quote, kind))}</dd></div></>}</dl></section>
-  })}</div>
 }
